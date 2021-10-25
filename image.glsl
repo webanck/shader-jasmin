@@ -1,3 +1,88 @@
+//https://www.shadertoy.com/view/4dffRH
+vec3 hash( vec3 p ) // replace this by something better. really. do
+{
+	p = vec3( dot(p,vec3(127.1,311.7, 74.7)),
+			  dot(p,vec3(269.5,183.3,246.1)),
+			  dot(p,vec3(113.5,271.9,124.6)));
+	return -1.0 + 2.0*fract(sin(p)*43758.5453123);
+}
+// return value noise (in x) and its derivatives (in yzw)
+vec4 noised( in vec3 x )
+{
+	// grid
+	vec3 i = floor(x);
+	vec3 w = fract(x);
+	
+	#if 1
+	// quintic interpolant
+	vec3 u = w*w*w*(w*(w*6.0-15.0)+10.0);
+	vec3 du = 30.0*w*w*(w*(w-2.0)+1.0);
+	#else
+	// cubic interpolant
+	vec3 u = w*w*(3.0-2.0*w);
+	vec3 du = 6.0*w*(1.0-w);
+	#endif
+	
+	// gradients
+	vec3 ga = hash( i+vec3(0.0,0.0,0.0) );
+	vec3 gb = hash( i+vec3(1.0,0.0,0.0) );
+	vec3 gc = hash( i+vec3(0.0,1.0,0.0) );
+	vec3 gd = hash( i+vec3(1.0,1.0,0.0) );
+	vec3 ge = hash( i+vec3(0.0,0.0,1.0) );
+	vec3 gf = hash( i+vec3(1.0,0.0,1.0) );
+	vec3 gg = hash( i+vec3(0.0,1.0,1.0) );
+	vec3 gh = hash( i+vec3(1.0,1.0,1.0) );
+	
+	// projections
+	float va = dot( ga, w-vec3(0.0,0.0,0.0) );
+	float vb = dot( gb, w-vec3(1.0,0.0,0.0) );
+	float vc = dot( gc, w-vec3(0.0,1.0,0.0) );
+	float vd = dot( gd, w-vec3(1.0,1.0,0.0) );
+	float ve = dot( ge, w-vec3(0.0,0.0,1.0) );
+	float vf = dot( gf, w-vec3(1.0,0.0,1.0) );
+	float vg = dot( gg, w-vec3(0.0,1.0,1.0) );
+	float vh = dot( gh, w-vec3(1.0,1.0,1.0) );
+	
+	// interpolations
+	return vec4( va + u.x*(vb-va) + u.y*(vc-va) + u.z*(ve-va) + u.x*u.y*(va-vb-vc+vd) + u.y*u.z*(va-vc-ve+vg) + u.z*u.x*(va-vb-ve+vf) + (-va+vb+vc-vd+ve-vf-vg+vh)*u.x*u.y*u.z,	// value
+				 ga + u.x*(gb-ga) + u.y*(gc-ga) + u.z*(ge-ga) + u.x*u.y*(ga-gb-gc+gd) + u.y*u.z*(ga-gc-ge+gg) + u.z*u.x*(ga-gb-ge+gf) + (-ga+gb+gc-gd+ge-gf-gg+gh)*u.x*u.y*u.z +   // derivatives
+				 du * (vec3(vb,vc,ve) - va + u.yzx*vec3(va-vb-vc+vd,va-vc-ve+vg,va-vb-ve+vf) + u.zxy*vec3(va-vb-ve+vf,va-vb-vc+vd,va-vc-ve+vg) + u.yzx*u.zxy*(-va+vb+vc-vd+ve-vf-vg+vh) ));
+}
+//https://www.shadertoy.com/view/Xsl3Dl
+float noise( in vec3 p )
+{
+	vec3 i = floor( p );
+	vec3 f = fract( p );
+	
+	vec3 u = f*f*(3.0-2.0*f);
+
+	return mix( mix( mix( dot( hash( i + vec3(0.0,0.0,0.0) ), f - vec3(0.0,0.0,0.0) ), 
+						  dot( hash( i + vec3(1.0,0.0,0.0) ), f - vec3(1.0,0.0,0.0) ), u.x),
+					 mix( dot( hash( i + vec3(0.0,1.0,0.0) ), f - vec3(0.0,1.0,0.0) ), 
+						  dot( hash( i + vec3(1.0,1.0,0.0) ), f - vec3(1.0,1.0,0.0) ), u.x), u.y),
+				mix( mix( dot( hash( i + vec3(0.0,0.0,1.0) ), f - vec3(0.0,0.0,1.0) ), 
+						  dot( hash( i + vec3(1.0,0.0,1.0) ), f - vec3(1.0,0.0,1.0) ), u.x),
+					 mix( dot( hash( i + vec3(0.0,1.0,1.0) ), f - vec3(0.0,1.0,1.0) ), 
+						  dot( hash( i + vec3(1.0,1.0,1.0) ), f - vec3(1.0,1.0,1.0) ), u.x), u.y), u.z );
+}
+
+//https://www.shadertoy.com/view/7lS3Dw
+//3d generalization of https://www.shadertoy.com/view/ttlGDf
+vec3 warp3d(vec3 pos, float t) {
+    float curv =.35, a = 1.2, b = 0.2;
+    pos *= 3.;
+    for(float k = 1.0; k < 4.0; k += 1.0){ 
+        pos.x += curv * sin(t + k * a * pos.y) + t * b;
+        pos.y += curv * cos(t + k * a * pos.x);
+        pos.y += curv * sin(t + k * a * pos.z) + t * b;
+        pos.z += curv * cos(t + k * a * pos.y);
+        pos.z += curv * sin(t + k * a * pos.x) + t * b;
+        pos.x += curv * cos(t + k * a * pos.z);
+    }
+    return 0.5 + 0.5 * cos(pos.xyz + vec3(1,2,4));
+}
+
+
 const float PI = 3.14;
 
 float obsDistance(const uint obsId)
@@ -82,12 +167,21 @@ float petal(in float r, in float maturity, in vec3 p)
 	//vec3 c = vec3(0, 0, r);
 	//return sphereD(c, 0.1*r, rotateY(0.5*maturity*PI, p));
 
+	//TODO: how to create creases/ridges in the middle of the petal as this is doing at a certain angle ?
+	//p.z += 0.7*abs(noise(p));
+
 	//scale
 	p /= r*vec3(1, 0.5, 1.);
 	//rotate
 	p = rotateY(0.5*maturity*PI, p);
 	//shift
 	p.x -= 1.;
+
+	//p += 0.1*warp3d(p, 0.);
+	//p.z += 0.3*abs(noise(p));
+	//p.x += abs(p.y); //beautiful star shaped
+	p.z += 0.1*exp2(-abs(p.y)); //middle ridge
+
 	return diskD(p);
 }
 //flower in the xy plane
@@ -105,24 +199,58 @@ float jasminD(in vec3 c, in float r, in vec3 orientation, in float maturity, in 
 {
 	return jasmin(r, maturity, p - c); //todo: p orientation transform
 }
+
+float map(in vec3 p)
+{
+	float radius = 0.15;
+	float maturity = 2.*iMouse.x/iResolution.x;
+	return jasminD(vec3(0, 0, -0.1), radius, vec3(0, 0, 1), maturity,
+		p
+		//p + 0.05*warp3d(p*1.5, 0.)
+	);
+}
+
+// http://iquilezles.org/www/articles/normalsSDF/normalsSDF.htm
+//#define ZERO 0
+#define ZERO (min(int(iTime),0))
+vec3 calcNormalOpaque( in vec3 pos, in float eps )
+{
+	vec4 kk;
+#if 0
+	vec2 e = vec2(1.0,-1.0)*0.5773*eps;
+	return normalize(
+		e.xyy*map(pos + e.xyy) +
+		e.yyx*map(pos + e.yyx) +
+		e.yxy*map(pos + e.yxy) +
+		e.xxx*map(pos + e.xxx)
+	);
+#else
+	// inspired by tdhooper and klems - a way to prevent the compiler from inlining map() 4 times
+	vec3 n = vec3(0.0);
+	for( int i=ZERO; i<4; i++ )
+	{
+		vec3 e = 0.5773*(2.0*vec3((((i+3)>>1)&1),((i>>1)&1),(i&1))-1.0);
+		n += e*map(pos+eps*e);
+	}
+	return normalize(n);
+#endif
+}
+
 const float STEP_SIZE = 0.01;
-const float NB_STEPS = 1000u;
+const float NB_STEPS = 200u;
 const float EPSILON = 1.1*STEP_SIZE;
 const float MAX_DEPTH = 10.;
+const float JACOBIAN_FACTOR = 20.;
 bool intersect(in vec3 ro, in vec3 rd, out vec3 intersection)
 {
 	float t = 0.;
 	for(uint i = 0u; i < NB_STEPS && t < MAX_DEPTH; i++)
 	{
 		intersection = ro + t*rd;
-		
-		float radius = 0.15;
-		float maturity = 2.*iMouse.x/iResolution.x;
-		float d = jasminD(vec3(0, 0, -0.1), radius, vec3(0, 0, 1), maturity, intersection);
+		float d = map(intersection);
 		if(d < EPSILON) return true;
 		
-		t += STEP_SIZE;
-		//t += max(STEP_SIZE, d);
+		t += max(STEP_SIZE, d)/JACOBIAN_FACTOR;
 	}
 	return false;
 }
@@ -133,5 +261,15 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 	vec3 rd;
 	pixelRay(fragCoord.xy, ro, rd);
 	vec3 intersection;
-	fragColor = vec4(intersect(ro, rd, intersection) ? 0.5 + 0.5*intersection : vec3(0), 1.);
+	bool intersects = intersect(ro, rd, intersection);
+	if(intersects)
+	{
+		//vec3 color = vec3(1.);//0.5 + 0.5*intersection;
+		vec3 lightDir = vec3(0., 0., 1.);//normalize(vec3(1.));
+		vec3 normal = calcNormalOpaque(intersection, 0.0001);
+		vec3 color = 0.5 + 0.5*normal;
+		color *= abs(dot(rd, normal));
+		fragColor = vec4(color, 1.);
+	}
+	else fragColor = vec4(vec3(0.), 1.);
 }
