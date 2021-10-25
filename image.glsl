@@ -63,15 +63,39 @@ float sphereD(in vec3 c, in float r, in vec3 p)
 {
 	return length(p - c) - r;
 }
+//a disk of unit radius in the xy plane
+float diskD(in vec3 p)
+{
+	float r2 = dot(p.xy, p.xy);
+	//Projection in the disk, closest is disk surface.
+	if(r2 < 1.0) return abs(p.z);
+	
+	//Projection out of disk, closest is distance to circle.
+	float r = sqrt(r2);
+	float h = r - 1.0;
+	return sqrt(h*h + p.z*p.z);
+}
 //maturity in [0, 2]
 float petal(in float r, in float maturity, in vec3 p)
 {
-	vec3 c = vec3(0, 0, r);
-	return sphereD(c, 0.1*r, rotateY(0.5*maturity*PI, p));
+	//a sphere describing the extremity of the petal trajectory (rotation) through maturation
+	//vec3 c = vec3(0, 0, r);
+	//return sphereD(c, 0.1*r, rotateY(0.5*maturity*PI, p));
+
+	//scale
+	p /= r*vec3(1, 0.5, 1.);
+	//rotate
+	p = rotateY(0.5*maturity*PI, p);
+	//shift
+	p.x -= 1.;
+	return diskD(p);
 }
+//flower in the xy plane
 const uint NB_PETALS = 5u;
 float jasmin(in float r, in float maturity, in vec3 p)
 {
+	//return petal(r, maturity, p);
+
 	float d = 2.*r;
 	for(uint i = 0u; i < NB_PETALS; i++)
 		d = min(d, petal(r, maturity, rotateZ(float(i)/float(NB_PETALS)*2.*PI, p)));
@@ -81,17 +105,24 @@ float jasminD(in vec3 c, in float r, in vec3 orientation, in float maturity, in 
 {
 	return jasmin(r, maturity, p - c); //todo: p orientation transform
 }
+const float STEP_SIZE = 0.01;
+const float NB_STEPS = 1000u;
+const float EPSILON = 1.1*STEP_SIZE;
+const float MAX_DEPTH = 10.;
 bool intersect(in vec3 ro, in vec3 rd, out vec3 intersection)
 {
-	intersection = ro;
-	for(uint i = 0u; i < 1000u; i++)
+	float t = 0.;
+	for(uint i = 0u; i < NB_STEPS && t < MAX_DEPTH; i++)
 	{
-		float radius = 0.5;
-		float maturity = 2.*iMouse.x/iResolution.x;
-		float d = jasminD(vec3(0, 0, -2), radius, vec3(0, 0, 1), maturity, intersection);
-		if(d < 0) return true;
+		intersection = ro + t*rd;
 		
-		intersection += rd*0.01;
+		float radius = 0.15;
+		float maturity = 2.*iMouse.x/iResolution.x;
+		float d = jasminD(vec3(0, 0, -0.1), radius, vec3(0, 0, 1), maturity, intersection);
+		if(d < EPSILON) return true;
+		
+		t += STEP_SIZE;
+		//t += max(STEP_SIZE, d);
 	}
 	return false;
 }
@@ -102,5 +133,5 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 	vec3 rd;
 	pixelRay(fragCoord.xy, ro, rd);
 	vec3 intersection;
-	fragColor = vec4(intersect(ro, rd, intersection) ? -0.5*intersection : vec3(0), 1.);
+	fragColor = vec4(intersect(ro, rd, intersection) ? 0.5 + 0.5*intersection : vec3(0), 1.);
 }
