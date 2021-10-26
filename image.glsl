@@ -69,63 +69,26 @@ float noise( in vec3 p )
 //https://www.shadertoy.com/view/7lS3Dw
 //3d generalization of https://www.shadertoy.com/view/ttlGDf
 vec3 warp3d(vec3 pos, float t) {
-    float curv =.35, a = 1.2, b = 0.2;
-    pos *= 3.;
-    for(float k = 1.0; k < 4.0; k += 1.0){ 
-        pos.x += curv * sin(t + k * a * pos.y) + t * b;
-        pos.y += curv * cos(t + k * a * pos.x);
-        pos.y += curv * sin(t + k * a * pos.z) + t * b;
-        pos.z += curv * cos(t + k * a * pos.y);
-        pos.z += curv * sin(t + k * a * pos.x) + t * b;
-        pos.x += curv * cos(t + k * a * pos.z);
-    }
-    return 0.5 + 0.5 * cos(pos.xyz + vec3(1,2,4));
+	float curv =.35, a = 1.2, b = 0.2;
+	pos *= 3.;
+	for(float k = 1.0; k < 4.0; k += 1.0)
+	{
+		pos.x += curv * sin(t + k * a * pos.y) + t * b;
+		pos.y += curv * cos(t + k * a * pos.x);
+		pos.y += curv * sin(t + k * a * pos.z) + t * b;
+		pos.z += curv * cos(t + k * a * pos.y);
+		pos.z += curv * sin(t + k * a * pos.x) + t * b;
+		pos.x += curv * cos(t + k * a * pos.z);
+	}
+	return 0.5 + 0.5 * cos(pos.xyz + vec3(1,2,4));
 }
+
+
+
 
 
 const float PI = 3.14;
 
-float obsDistance(const uint obsId)
-{
-	//Inside view.
-	if(obsId == 0u)
-		return 1.;
-	//Outside view.
-	else
-		return 8.;
-}
-mat3 observerViewMatrix(const uint obsId, vec2 mouseUV)
-{
-	vec2 shift = vec2(0.);
-	float a = (shift.x + mouseUV.x)*PI*2.;
-	float b = (shift.y + mouseUV.y)*PI;
-	//if (mouseUV == vec2(0)) {b = -0.2; a = 0.2;}
-	//if(obsId == 1u)
-	//{
-	//	a *= -1.;
-	//	b *= -1.;
-	//}
-	
-	vec3 camera = vec3(cos(b)*sin(a), sin(b), cos(b)*cos(a));
-	//Z vector
-	vec3 up = normalize(cross(cross(camera, vec3(0, 1, 0)), camera));
-	//Y vector
-	vec3 x = normalize(cross(up, camera));
-	
-	//inside view
-	return obsDistance(obsId)*mat3(x, up, camera);
-}
-void pixelRay(in vec2 ij, out vec3 ro, out vec3 rd)
-{
-	//Towards -Z.
-	ro = vec3(0, 0, 1);
-	vec2 q = (ij - 0.5*iResolution.xy)/iResolution.y;
-	rd = normalize(vec3(q, 0) - ro);
-
-	//mat3 view = observerViewMatrix(0u, iMouse.xy/iResolution.xy - 0.5);
-	//ro = view[2];
-	//rd = normalize(view*rd);
-}
 
 vec3 rotateZ(in float rads, in vec3 p)
 {
@@ -144,6 +107,10 @@ vec3 rotateY(in float rads, in vec3 p)
 	return rotateZ(rads, p.zxy).yzx;
 }
 
+float sphereD(in vec3 p)
+{
+	return length(p) - 1.;
+}
 float sphereD(in vec3 c, in float r, in vec3 p)
 {
 	return length(p - c) - r;
@@ -161,7 +128,7 @@ float diskD(in vec3 p)
 	return sqrt(h*h + p.z*p.z);
 }
 //maturity in [0, 2]
-float petal(in float r, in float maturity, in vec3 p)
+float petal(in float r, in float maturity, in vec3 p, in vec3 wp)
 {
 	//a sphere describing the extremity of the petal trajectory (rotation) through maturation
 	//vec3 c = vec3(0, 0, r);
@@ -177,43 +144,115 @@ float petal(in float r, in float maturity, in vec3 p)
 	//shift
 	p.x -= 1.;
 
-	//p += 0.1*warp3d(p, 0.);
-	//p.z += 0.3*abs(noise(p));
+	//p += warp3d(wp, 0.3*iTime);
+	p.z += 0.3*(noise(7.*wp));
 	//p.x += abs(p.y); //beautiful star shaped
 	p.z += 0.1*exp2(-abs(p.y)); //middle ridge
+	//p += 0.1*warp3d(p*0.3, 0.);
 
 	return diskD(p);
 }
+
+//https://iquilezles.org/www/articles/distfunctions/distfunctions.htm
+//float opCheapBend(in vec3 p)
+//float bentPetal(in float r, in float maturity, in vec3 p, in vec3 wp)
+//{
+//	const float k = 2.; // or some other amount
+//	float c = cos(k*p.x);
+//	float s = sin(k*p.x);
+//	mat2  m = mat2(c,-s,s,c);
+//	vec3  q = vec3(m*p.xy,p.z);
+//	return petal(r, maturity, q, wp);
+//}
+
 //flower in the xy plane
 const uint NB_PETALS = 5u;
-float jasmin(in float r, in float maturity, in vec3 p)
+float jasmin(in float r, in float maturity, in vec3 p, in vec3 wp)
 {
-	//return petal(r, maturity, p);
+	//return bentPetal(r, maturity, rotateY(0.5*PI, p), wp);
 
 	float d = 2.*r;
 	for(uint i = 0u; i < NB_PETALS; i++)
-		d = min(d, petal(r, maturity, rotateZ(float(i)/float(NB_PETALS)*2.*PI, p)));
+		d = min(d, petal(r, maturity, rotateZ(float(i)/float(NB_PETALS)*2.*PI, p), wp));
 	return d;
 }
+//https://www.shadertoy.com/view/ls2GRz
+float spiral(vec3 p, vec2 c, float th){
+	float r=length(p.xy);
+	vec2 f=vec2(log(r),atan(p.y,p.x))*0.5/PI;//Log-polar coordinates
+	float d=f.y*c.x-f.x*c.y;//apply rotation and scaling.
+	d=fract(d);//"fold" d to [0,1] interval
+	d=(d-0.5)*2.*PI*r/length(c);//(0.5-abs(d-0.5))*2.*PI*r/length(c);
+
+	vec2 pp=vec2(d,p.z);
+	//float a=20.*sin(3.*iTime)*f.x;//twisting angle
+	//mat2 m=mat2(vec2(cos(a),-sin(a)), vec2(sin(a),cos(a)));
+	//pp=m*pp;//apply twist
+	pp=abs(pp);
+	float e=6.5;//+5.*sin(iTime);//superquadric param
+	return 0.9*(pow(pow(pp.x,e)+pow(pp.y,e),1./e)-th*r);//distance have to be scaled down because this is just an approximation.
+}
+
+float sdBox( vec3 p, vec3 b )
+{
+  vec3 q = abs(p) - b;
+  return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0);
+}
+float bentBox(in vec3 p, in vec3 b)
+{
+    const float k = 0.5; // or some other amount
+    float c = cos(k*p.x);
+    float s = sin(k*p.x);
+    mat2  m = mat2(c,-s,s,c);
+    vec3  q = vec3(m*p.xy,p.z);
+    return sdBox(q, b);
+}
+float bentDisk(in vec3 p)
+{
+    const float k = 0.5; // or some other amount
+    //float c = cos(k*p.x);
+    //float s = sin(k*p.x);
+    //mat2  m = mat2(c,-s,s,c);
+    //vec3  q = vec3(m*p.xy,p.z);
+    //return diskD(q.zyx);
+	//return sdBox(p, vec3(1.)) - 0.9*exp(-distance(p, vec3(0., 0., 0.)));
+	return diskD(p) - 0.3*exp(-distance(p, vec3(0., 0., 0.5)));
+	return diskD(p - 0.3*(p - vec3(0, 0.5, 0.2)));
+	return diskD(vec3(p.xy, p.z + k * p.x*p.x));
+}
+
 float jasminD(in vec3 c, in float r, in vec3 orientation, in float maturity, in vec3 p)
 {
-	return jasmin(r, maturity, p - c); //todo: p orientation transform
+	//return jasmin(r, maturity, p - c, p); //todo: p orientation transform
+
+	//TODO: roll/swirl/fold/spiral
+	vec3 q = (p - c)*10.;
+	//q = rotateX(0.5*PI, q);
+
+	//return spiral(q, vec2(1., 10.), 0.05);
+	
+	//vec3 nq = rotateX(10.5*PI*sign(q.y), q);
+	//return sphereD(vec3(q.x, nq.yz));
+	//return diskD(vec3(q.x, nq.yz));
+	return bentDisk(q);
+	//return diskD(q);
+	
+	return bentBox(q, vec3(1., 1., 0.5));
 }
 
 float map(in vec3 p)
 {
 	float radius = 0.15;
-	float maturity = 2.*iMouse.x/iResolution.x;
-	return jasminD(vec3(0, 0, -0.1), radius, vec3(0, 0, 1), maturity,
-		p
-		//p + 0.05*warp3d(p*1.5, 0.)
-	);
+	//float maturity = 2.*iMouse.x/iResolution.x;
+	float maturity = 0.3;
+	//float maturity = cos(1. + 0.3*iTime);//2.*iMouse.x/iResolution.x;
+	return jasminD(vec3(0, 0, -0.1), radius, vec3(0, 0, 1), maturity, p);
 }
 
 // http://iquilezles.org/www/articles/normalsSDF/normalsSDF.htm
 //#define ZERO 0
 #define ZERO (min(int(iTime),0))
-vec3 calcNormalOpaque( in vec3 pos, in float eps )
+vec3 calcNormal( in vec3 pos, in float eps )
 {
 	vec4 kk;
 #if 0
@@ -255,6 +294,52 @@ bool intersect(in vec3 ro, in vec3 rd, out vec3 intersection)
 	return false;
 }
 
+//TODO: softshadow
+
+//----------------------------------------------------
+
+float obsDistance(const uint obsId)
+{
+	//Inside view.
+	if(obsId == 0u)
+		return 1.;
+	//Outside view.
+	else
+		return 8.;
+}
+mat3 observerViewMatrix(const uint obsId, vec2 mouseUV)
+{
+	vec2 shift = vec2(0.);
+	float a = (shift.x + mouseUV.x)*PI*2.;
+	float b = (shift.y + mouseUV.y)*PI;
+	//if (mouseUV == vec2(0)) {b = -0.2; a = 0.2;}
+	//if(obsId == 1u)
+	//{
+	//	a *= -1.;
+	//	b *= -1.;
+	//}
+	
+	vec3 camera = vec3(cos(b)*sin(a), sin(b), cos(b)*cos(a));
+	//Z vector
+	vec3 up = normalize(cross(cross(camera, vec3(0, 1, 0)), camera));
+	//Y vector
+	vec3 x = normalize(cross(up, camera));
+	
+	//inside view
+	return obsDistance(obsId)*mat3(x, up, camera);
+}
+void pixelRay(in vec2 ij, out vec3 ro, out vec3 rd)
+{
+	//Towards -Z.
+	ro = vec3(0, 0, 1);
+	vec2 q = (ij - 0.5*iResolution.xy)/iResolution.y;
+	rd = normalize(vec3(q, 0) - ro);
+
+	mat3 view = observerViewMatrix(0u, iMouse.xy/iResolution.xy - 0.5);
+	ro = view[2];
+	rd = normalize(view*rd);
+}
+
 void mainImage(out vec4 fragColor, in vec2 fragCoord)
 {
 	vec3 ro;
@@ -264,12 +349,12 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 	bool intersects = intersect(ro, rd, intersection);
 	if(intersects)
 	{
-		//vec3 color = vec3(1.);//0.5 + 0.5*intersection;
-		vec3 lightDir = vec3(0., 0., 1.);//normalize(vec3(1.));
-		vec3 normal = calcNormalOpaque(intersection, 0.0001);
+		vec3 normal = calcNormal(intersection, 0.0001);
 		vec3 color = 0.5 + 0.5*normal;
-		color *= abs(dot(rd, normal));
-		fragColor = vec4(color, 1.);
+		vec3 lightDir =
+			vec3(0., 0., 1.);
+			//normalize(vec3(1.));
+		fragColor = vec4(color * abs(dot(rd, normal)), 1.);
 	}
 	else fragColor = vec4(vec3(0.), 1.);
 }
