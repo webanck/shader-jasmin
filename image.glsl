@@ -1,3 +1,11 @@
+vec2 cartesianToPolar(in vec2 p)
+{
+	float r = length(p);
+	float theta = atan(p.y, p.x);
+	return vec2(r, theta);
+}
+
+
 //https://www.shadertoy.com/view/4dffRH
 vec3 hash( vec3 p ) // replace this by something better. really. do
 {
@@ -127,6 +135,19 @@ float diskD(in vec3 p)
 	float h = r - 1.0;
 	return sqrt(h*h + p.z*p.z);
 }
+float bentDisk(in vec3 p)
+{
+    const float k = 20.*iMouse.x/iResolution.x; // or some other amount
+    float c = cos(k*p.y);
+    float s = sin(k*p.y);
+    mat2  m = mat2(c,-s,s,c);
+    vec3  q = vec3(m*p.xy,p.z);
+    return diskD(q);
+	////return sdBox(p, vec3(1.)) - 0.9*exp(-distance(p, vec3(0., 0., 0.)));
+	//return diskD(p) - 0.3*exp(-distance(p, vec3(0., 0., 0.5)));
+	//return diskD(p - 0.3*(p - vec3(0, 0.5, 0.2)));
+	//return diskD(vec3(p.xy, p.z + k * p.x*p.x));
+}
 //maturity in [0, 2]
 float petal(in float r, in float maturity, in vec3 p, in vec3 wp)
 {
@@ -144,13 +165,15 @@ float petal(in float r, in float maturity, in vec3 p, in vec3 wp)
 	//shift
 	p.x -= 1.;
 
+	float mouseFactor = (1.-iMouse.y/iResolution.y);
 	//p += warp3d(wp, 0.3*iTime);
-	p.z += 0.3*(noise(7.*wp));
+	p.z += mouseFactor * 0.3*(noise(7.*wp));
 	//p.x += abs(p.y); //beautiful star shaped
-	p.z += 0.1*exp2(-abs(p.y)); //middle ridge
+	p.z += mouseFactor * 0.1*exp2(-abs(p.y)); //middle ridge
 	//p += 0.1*warp3d(p*0.3, 0.);
 
 	return diskD(p);
+	//return bentDisk(p);
 }
 
 //https://iquilezles.org/www/articles/distfunctions/distfunctions.htm
@@ -169,7 +192,7 @@ float petal(in float r, in float maturity, in vec3 p, in vec3 wp)
 const uint NB_PETALS = 5u;
 float jasmin(in float r, in float maturity, in vec3 p, in vec3 wp)
 {
-	//return bentPetal(r, maturity, rotateY(0.5*PI, p), wp);
+	return petal(r, maturity, rotateY(0.5*PI, p), wp);
 
 	float d = 2.*r;
 	for(uint i = 0u; i < NB_PETALS; i++)
@@ -200,30 +223,18 @@ float sdBox( vec3 p, vec3 b )
 }
 float bentBox(in vec3 p, in vec3 b)
 {
-    const float k = 0.5; // or some other amount
+    const float k = 2.*PI*(1.-iMouse.y/iResolution.y); // or some other amount
     float c = cos(k*p.x);
     float s = sin(k*p.x);
     mat2  m = mat2(c,-s,s,c);
     vec3  q = vec3(m*p.xy,p.z);
     return sdBox(q, b);
 }
-float bentDisk(in vec3 p)
-{
-    const float k = 0.5; // or some other amount
-    //float c = cos(k*p.x);
-    //float s = sin(k*p.x);
-    //mat2  m = mat2(c,-s,s,c);
-    //vec3  q = vec3(m*p.xy,p.z);
-    //return diskD(q.zyx);
-	//return sdBox(p, vec3(1.)) - 0.9*exp(-distance(p, vec3(0., 0., 0.)));
-	return diskD(p) - 0.3*exp(-distance(p, vec3(0., 0., 0.5)));
-	return diskD(p - 0.3*(p - vec3(0, 0.5, 0.2)));
-	return diskD(vec3(p.xy, p.z + k * p.x*p.x));
-}
+
 
 float jasminD(in vec3 c, in float r, in vec3 orientation, in float maturity, in vec3 p)
 {
-	//return jasmin(r, maturity, p - c, p); //todo: p orientation transform
+	return jasmin(r, maturity, p - c, p); //todo: p orientation transform
 
 	//TODO: roll/swirl/fold/spiral
 	vec3 q = (p - c)*10.;
@@ -243,8 +254,8 @@ float jasminD(in vec3 c, in float r, in vec3 orientation, in float maturity, in 
 float map(in vec3 p)
 {
 	float radius = 0.15;
-	//float maturity = 2.*iMouse.x/iResolution.x;
-	float maturity = 0.3;
+	float maturity = 2.*iMouse.x/iResolution.x;
+	//float maturity = 0.3;
 	//float maturity = cos(1. + 0.3*iTime);//2.*iMouse.x/iResolution.x;
 	return jasminD(vec3(0, 0, -0.1), radius, vec3(0, 0, 1), maturity, p);
 }
@@ -340,8 +351,42 @@ void pixelRay(in vec2 ij, out vec3 ro, out vec3 rd)
 	rd = normalize(view*rd);
 }
 
+void debugSDF(out vec4 fragColor, in vec2 fragCoord)
+{
+	//[-1, 1]x[-1, 1]
+	vec3 p = vec3(fragCoord.xy/iResolution.xy - 0.5, 0.);
+	p = rotateX(0.5*PI, p);
+	p += vec3(0., 0., -0.1);
+
+	//float d = sphereD(p);
+	//float d = bentBox(p, vec3(0.1));
+	float d = map(p);
+
+	//Coloring
+	//const float dMin = 0.;
+	//const float dMax = 2.;
+	//d = (clamp(d, dMin, dMax) - dMin)/(dMax - dMin);
+	//vec3 color = vec3(d);
+	//
+	////https://www.shadertoy.com/view/3t33WH
+	//vec3 color = (d<0.0) ? vec3(0.6,0.8,1.0) : vec3(0.9,0.6,0.3);
+	//color *= 1.0 - exp(-9.0*abs(d));
+	//color *= 1.0 + 0.2*cos(128.0*abs(d));
+	//color = mix( color, vec3(1.0), 1.0-smoothstep(0.0,0.015,abs(d)) );
+	//
+	//https://www.shadertoy.com/view/3ltSW2
+	vec3 color = vec3(1.0) - sign(d)*vec3(0.1,0.4,0.7);
+	color *= 1.0 - exp(-3.0*abs(d));
+	color *= 0.8 + 0.2*cos(150.0*d);
+	color = mix( color, vec3(1.0), 1.0-smoothstep(0.0,0.01,abs(d)) );
+
+	fragColor = vec4(color, 1.);
+}
 void mainImage(out vec4 fragColor, in vec2 fragCoord)
 {
+	debugSDF(fragColor, fragCoord);
+	return;
+
 	vec3 ro;
 	vec3 rd;
 	pixelRay(fragCoord.xy, ro, rd);
