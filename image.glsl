@@ -148,6 +148,31 @@ float bentDisk(in vec3 p)
 	//return diskD(p - 0.3*(p - vec3(0, 0.5, 0.2)));
 	//return diskD(vec3(p.xy, p.z + k * p.x*p.x));
 }
+void spiralify(inout vec2 p)
+{
+	vec2 mouseFactors = iMouse.xy/iResolution.xy;
+	mouseFactors.y = 1. - mouseFactors.y;
+
+	float cst = 6.*mouseFactors.y;
+	const float a = 3.;
+	const float b = 3.;
+	//const float a = 10. * mouseFactors.x;
+	//const float b = 10. * mouseFactors.y;
+	float r = length(p);//sqrt(x*x + y*y);
+	float angle = acos(p.x/r) * (p.y < 0.0 ? -1.0:1.0);
+	float spiralangle = angle + b * PI * log(r * a + cst);
+	//float spiralangle = angle + b * PI * log(pow(r, 5.*mouseFactors.x) * a + cst - 3.);
+	//float spiralangle = angle + b * PI * log(r * a + cst) * clamp(1. - 13.3*r, 0., 1.);
+	//TODO: find why 13.3 ?
+
+	//p = r * vec2(cos(spiralangle), sin(spiralangle));
+	//p = mix(r * vec2(cos(spiralangle), sin(spiralangle)), p, clamp(mouseFactors.x * 15.*r, 0., 1.));
+	p = mix(r * vec2(cos(spiralangle), sin(spiralangle)), p, clamp(13.3*r, 0., 1.));
+}
+
+
+//----------------------------------------------------
+
 //maturity in [0, 2]
 float petal(in float r, in float maturity, in vec3 p, in vec3 wp)
 {
@@ -158,107 +183,62 @@ float petal(in float r, in float maturity, in vec3 p, in vec3 wp)
 	//TODO: how to create creases/ridges in the middle of the petal as this is doing at a certain angle ?
 	//p.z += 0.7*abs(noise(p));
 
+	//Spiral at the end of the petal.
+	p.xz -= vec2(0.3, -0.);
+	spiralify(p.xz);
+	p.xz += vec2(0.3, -0.);
+
+	//Big spiral at the origin of the petal.
+	p.xz /= 3.;
+	spiralify(p.xz);
+	p.xz *= 3.;
+
 	//scale
 	p /= r*vec3(1, 0.5, 1.);
 	//rotate
-	p = rotateY(0.5*maturity*PI, p);
+	//p = rotateY(0.5*maturity*PI, p);
 	//shift
 	p.x -= 1.;
 
-	float mouseFactor = (1.-iMouse.y/iResolution.y);
+	float mouseFactor = 1.;
+	//float mouseFactor = (1.-iMouse.y/iResolution.y);
 	//p += warp3d(wp, 0.3*iTime);
-	p.z += mouseFactor * 0.3*(noise(7.*wp));
+	p.z += 2.*mouseFactor * 0.3*(noise(7.*wp));
 	//p.x += abs(p.y); //beautiful star shaped
 	p.z += mouseFactor * 0.1*exp2(-abs(p.y)); //middle ridge
 	//p += 0.1*warp3d(p*0.3, 0.);
 
 	return diskD(p);
-	//return bentDisk(p);
 }
-
-//https://iquilezles.org/www/articles/distfunctions/distfunctions.htm
-//float opCheapBend(in vec3 p)
-//float bentPetal(in float r, in float maturity, in vec3 p, in vec3 wp)
-//{
-//	const float k = 2.; // or some other amount
-//	float c = cos(k*p.x);
-//	float s = sin(k*p.x);
-//	mat2  m = mat2(c,-s,s,c);
-//	vec3  q = vec3(m*p.xy,p.z);
-//	return petal(r, maturity, q, wp);
-//}
 
 //flower in the xy plane
 const uint NB_PETALS = 5u;
 float jasmin(in float r, in float maturity, in vec3 p, in vec3 wp)
 {
-	return petal(r, maturity, rotateY(0.5*PI, p), wp);
+	//return petal(r, maturity, rotateY(0.5*PI, p), wp);
 
 	float d = 2.*r;
 	for(uint i = 0u; i < NB_PETALS; i++)
 		d = min(d, petal(r, maturity, rotateZ(float(i)/float(NB_PETALS)*2.*PI, p), wp));
 	return d;
 }
-//https://www.shadertoy.com/view/ls2GRz
-float spiral(vec3 p, vec2 c, float th){
-	float r=length(p.xy);
-	vec2 f=vec2(log(r),atan(p.y,p.x))*0.5/PI;//Log-polar coordinates
-	float d=f.y*c.x-f.x*c.y;//apply rotation and scaling.
-	d=fract(d);//"fold" d to [0,1] interval
-	d=(d-0.5)*2.*PI*r/length(c);//(0.5-abs(d-0.5))*2.*PI*r/length(c);
-
-	vec2 pp=vec2(d,p.z);
-	//float a=20.*sin(3.*iTime)*f.x;//twisting angle
-	//mat2 m=mat2(vec2(cos(a),-sin(a)), vec2(sin(a),cos(a)));
-	//pp=m*pp;//apply twist
-	pp=abs(pp);
-	float e=6.5;//+5.*sin(iTime);//superquadric param
-	return 0.9*(pow(pow(pp.x,e)+pow(pp.y,e),1./e)-th*r);//distance have to be scaled down because this is just an approximation.
-}
-
-float sdBox( vec3 p, vec3 b )
-{
-  vec3 q = abs(p) - b;
-  return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0);
-}
-float bentBox(in vec3 p, in vec3 b)
-{
-    const float k = 2.*PI*(1.-iMouse.y/iResolution.y); // or some other amount
-    float c = cos(k*p.x);
-    float s = sin(k*p.x);
-    mat2  m = mat2(c,-s,s,c);
-    vec3  q = vec3(m*p.xy,p.z);
-    return sdBox(q, b);
-}
-
 
 float jasminD(in vec3 c, in float r, in vec3 orientation, in float maturity, in vec3 p)
 {
 	return jasmin(r, maturity, p - c, p); //todo: p orientation transform
-
-	//TODO: roll/swirl/fold/spiral
-	vec3 q = (p - c)*10.;
-	//q = rotateX(0.5*PI, q);
-
-	//return spiral(q, vec2(1., 10.), 0.05);
-	
-	//vec3 nq = rotateX(10.5*PI*sign(q.y), q);
-	//return sphereD(vec3(q.x, nq.yz));
-	//return diskD(vec3(q.x, nq.yz));
-	return bentDisk(q);
-	//return diskD(q);
-	
-	return bentBox(q, vec3(1., 1., 0.5));
 }
 
 float map(in vec3 p)
 {
 	float radius = 0.15;
-	float maturity = 2.*iMouse.x/iResolution.x;
+	//float maturity = 2.*iMouse.x/iResolution.x;
 	//float maturity = 0.3;
+	float maturity = 0.;
 	//float maturity = cos(1. + 0.3*iTime);//2.*iMouse.x/iResolution.x;
 	return jasminD(vec3(0, 0, -0.1), radius, vec3(0, 0, 1), maturity, p);
 }
+
+//----------------------------------------------------
 
 // http://iquilezles.org/www/articles/normalsSDF/normalsSDF.htm
 //#define ZERO 0
@@ -353,7 +333,7 @@ void pixelRay(in vec2 ij, out vec3 ro, out vec3 rd)
 
 void debugSDF(out vec4 fragColor, in vec2 fragCoord)
 {
-	//[-1, 1]x[-1, 1]
+	//Point p in [-1, 1]x[-1, 1] of xy plan.
 	vec3 p = vec3(fragCoord.xy/iResolution.xy - 0.5, 0.);
 	p = rotateX(0.5*PI, p);
 	p += vec3(0., 0., -0.1);
@@ -384,8 +364,7 @@ void debugSDF(out vec4 fragColor, in vec2 fragCoord)
 }
 void mainImage(out vec4 fragColor, in vec2 fragCoord)
 {
-	debugSDF(fragColor, fragCoord);
-	return;
+	//debugSDF(fragColor, fragCoord); return;
 
 	vec3 ro;
 	vec3 rd;
