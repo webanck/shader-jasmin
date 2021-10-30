@@ -1,3 +1,6 @@
+#define DEBUG_PETAL false
+
+
 vec2 cartesianToPolar(in vec2 p)
 {
 	float r = length(p);
@@ -74,22 +77,6 @@ float noise( in vec3 p )
 						  dot( hash( i + vec3(1.0,1.0,1.0) ), f - vec3(1.0,1.0,1.0) ), u.x), u.y), u.z );
 }
 
-//https://www.shadertoy.com/view/7lS3Dw
-//3d generalization of https://www.shadertoy.com/view/ttlGDf
-vec3 warp3d(vec3 pos, float t) {
-	float curv =.35, a = 1.2, b = 0.2;
-	pos *= 3.;
-	for(float k = 1.0; k < 4.0; k += 1.0)
-	{
-		pos.x += curv * sin(t + k * a * pos.y) + t * b;
-		pos.y += curv * cos(t + k * a * pos.x);
-		pos.y += curv * sin(t + k * a * pos.z) + t * b;
-		pos.z += curv * cos(t + k * a * pos.y);
-		pos.z += curv * sin(t + k * a * pos.x) + t * b;
-		pos.x += curv * cos(t + k * a * pos.z);
-	}
-	return 0.5 + 0.5 * cos(pos.xyz + vec3(1,2,4));
-}
 
 
 
@@ -98,13 +85,18 @@ vec3 warp3d(vec3 pos, float t) {
 const float PI = 3.14;
 
 
+vec2 rotate(in float rads, in vec2 p)
+{
+	float c = cos(rads);
+	float s = sin(rads);
+	return vec2(
+		c*p.x - s*p.y,
+		s*p.x + c*p.y
+	);
+}
 vec3 rotateZ(in float rads, in vec3 p)
 {
-	return vec3(
-		cos(rads)*p.x - sin(rads)*p.y,
-		sin(rads)*p.x + cos(rads)*p.y,
-		p.z
-	);
+	return vec3(rotate(rads, p.xy), p.z);
 }
 vec3 rotateX(in float rads, in vec3 p)
 {
@@ -135,46 +127,98 @@ float diskD(in vec3 p)
 	float h = r - 1.0;
 	return sqrt(h*h + p.z*p.z);
 }
-float bentDisk(in vec3 p)
+vec3 diskP(in vec3 p)
 {
-    const float k = 20.*iMouse.x/iResolution.x; // or some other amount
-    float c = cos(k*p.y);
-    float s = sin(k*p.y);
-    mat2  m = mat2(c,-s,s,c);
-    vec3  q = vec3(m*p.xy,p.z);
-    return diskD(q);
-	////return sdBox(p, vec3(1.)) - 0.9*exp(-distance(p, vec3(0., 0., 0.)));
-	//return diskD(p) - 0.3*exp(-distance(p, vec3(0., 0., 0.5)));
-	//return diskD(p - 0.3*(p - vec3(0, 0.5, 0.2)));
-	//return diskD(vec3(p.xy, p.z + k * p.x*p.x));
+	float r2 = dot(p.xy, p.xy);
+	//Projection in the disk, closest is disk surface.
+	if(r2 < 1.0) return vec3(p.xy, sign(p.z));
+	
+	//Projection out of disk, closest is distance to circle.
+	float r = sqrt(r2);
+	return vec3(cos(r), sin(r), sign(p.z));
 }
-void spiralify(inout vec2 p)
+
+void spiralify(inout vec2 p, in float a, in float b, in float falloffRadius)
+{
+	const float cst = 0.;
+	float r = dot(p, p);
+	if(r > falloffRadius*falloffRadius) return;
+	r = sqrt(r);
+	//float angle = atan(p.y/r, p.x/r);
+	float angle = acos(p.x/r) * sign(p.y);
+	float spiralangle = angle - sign(a) / b * log(r / abs(a) + cst);
+	//float spiralangle = angle - sign(a) / b * log(r / abs(a) * min(1., r/falloffRadius));
+	//float spiralangle = angle - sign(a) / b * log(r / abs(a) + cst) * (1. - r/falloffRadius);
+	//p = mix(r * vec2(cos(spiralangle), sin(spiralangle)), p, r/falloffRadius);
+	p = r * vec2(cos(spiralangle), sin(spiralangle));
+}
+void spiralifyElongation(inout vec2 p, in float radius, in float elongationFactor)
 {
 	vec2 mouseFactors = iMouse.xy/iResolution.xy;
 	mouseFactors.y = 1. - mouseFactors.y;
 
-	float cst = 6.*mouseFactors.y;
-	const float a = 3.;
-	const float b = 3.;
-	//const float a = 10. * mouseFactors.x;
-	//const float b = 10. * mouseFactors.y;
-	float r = length(p);//sqrt(x*x + y*y);
-	float angle = acos(p.x/r) * (p.y < 0.0 ? -1.0:1.0);
-	float spiralangle = angle + b * PI * log(r * a + cst);
-	//float spiralangle = angle + b * PI * log(pow(r, 5.*mouseFactors.x) * a + cst - 3.);
-	//float spiralangle = angle + b * PI * log(r * a + cst) * clamp(1. - 13.3*r, 0., 1.);
-	//TODO: find why 13.3 ?
+	const float a = -0.25 * (mouseFactors.x -0.5);
+	const float arcLength = abs(elongationFactor)*radius;
+	const float b = sign(elongationFactor)*radius/sqrt(arcLength*arcLength - radius*radius);
 
-	//p = r * vec2(cos(spiralangle), sin(spiralangle));
-	//p = mix(r * vec2(cos(spiralangle), sin(spiralangle)), p, clamp(mouseFactors.x * 15.*r, 0., 1.));
-	p = mix(r * vec2(cos(spiralangle), sin(spiralangle)), p, clamp(13.3*r, 0., 1.));
+	spiralify(p, a, b, radius);
+}
+float spiralifyAngle(inout vec2 p, in float radius, in float angle)
+{
+	vec2 mouseFactors = iMouse.xy/iResolution.xy;
+	mouseFactors.y = 1. - mouseFactors.y;
+
+	const float a = -0.25 * (mouseFactors.x -0.5);
+	const float b = log(radius/a) / angle;
+
+	//p = rotate(-angle, p);
+	//p.y -= -0.5*radius;
+	spiralify(p, a, b, radius);
+	//p.y += -0.5*radius;
+	//p = rotate(angle, p);
+
+	return b;
+}
+
+float spiralD(in vec2 p, in float a, in float b, in float radius)
+{
+	//calculate the target radius and theta
+	float r = length(p);
+	float t = atan(p.y, p.x);
+	
+	//early exit if the point requested is the origin itself
+	//to avoid taking the logarithm of zero in the next step
+	if(r == 0.)
+		return 0.;
+	
+	//calculate the floating point approximation for n
+	float n = (log(r/a)/b - t)/(2.*PI);
+	
+	//compute the endpoint
+	float theta = log(radius/a)/b;
+	vec2 endPoint = radius*vec2(cos(theta), sin(theta));
+	float endPointD = distance(p, endPoint);
+	
+	float upper_r = a * exp(b * (t + 2.*PI*ceil(n)));
+	if(upper_r > radius)
+	{
+		n = (log(radius/a)/b - t)/(2.*PI);
+		float lower_r = a * exp(b * (t + 2.*PI*floor(n)));
+		return min(endPointD, abs(r - lower_r));
+	}
+	
+	//find the two possible radii for the closest point
+	float lower_r = a * exp(b * (t + 2.*PI*floor(n)));
+	
+	//return the minimum distance to the target point
+	return min(endPointD, min(abs(upper_r - r), abs(r - lower_r)));
 }
 
 
 //----------------------------------------------------
 
 //maturity in [0, 2]
-float petal(in float r, in float maturity, in vec3 p, in vec3 wp)
+float petal(in float r, in float maturity, in vec3 p, in vec3 wp, out vec3 color)
 {
 	//a sphere describing the extremity of the petal trajectory (rotation) through maturation
 	//vec3 c = vec3(0, 0, r);
@@ -183,59 +227,96 @@ float petal(in float r, in float maturity, in vec3 p, in vec3 wp)
 	//TODO: how to create creases/ridges in the middle of the petal as this is doing at a certain angle ?
 	//p.z += 0.7*abs(noise(p));
 
-	//Spiral at the end of the petal.
-	p.xz -= vec2(0.3, -0.);
-	spiralify(p.xz);
-	p.xz += vec2(0.3, -0.);
+	////Small spiral at the end of the petal.
+	//p.xz -= vec2(0.3, -0.);
+	//spiralify(p.xz, 13.3);
+	////TODO: find why approximatively 13.3 ?
+	//p.xz += vec2(0.3, -0.);
 
 	//Big spiral at the origin of the petal.
-	p.xz /= 3.;
-	spiralify(p.xz);
-	p.xz *= 3.;
+	//const float scaleFactor = 3.*(1. - iMouse.y/iResolution.y);
+	//p.xz /= scaleFactor;
+	////spiralify(p.xz, 13.3); //approx 13.3 with small spiral
+	//spiralify(p.xz, 6.);
+	//p.xz *= scaleFactor;
 
+	//spiralifyAngle(p.xz, 0.1, -2.*PI);
 	//scale
 	p /= r*vec3(1, 0.5, 1.);
+	//float b = spiralifyAngle(p.xz, 1., -2.*PI);
+	//spiralifyElongation(p.xz, 3., 1.1);
 	//rotate
-	//p = rotateY(0.5*maturity*PI, p);
+	//p = rotateY((-0.5 + 0.5*maturity)*PI, p);
 	//shift
-	p.x -= 1.;
+	//p.x -= 1.;
 
-	float mouseFactor = 1.;
-	//float mouseFactor = (1.-iMouse.y/iResolution.y);
-	//p += warp3d(wp, 0.3*iTime);
-	p.z += 2.*mouseFactor * 0.3*(noise(7.*wp));
-	//p.x += abs(p.y); //beautiful star shaped
-	p.z += mouseFactor * 0.1*exp2(-abs(p.y)); //middle ridge
-	//p += 0.1*warp3d(p*0.3, 0.);
+	color = vec3(1.);
+	float spid = spiralD(p.xz, 1., 0.5, maturity);
+	//float sphd = 0.01*length(p);
+	//return max(spid, sphd);
+	const float k = 0.005;
+	float h = clamp(0.5 - 0.5*(spid-sphd)/k, 0.0, 1.0 );
+	return mix( spid, sphd, h ) + k*h*(1.0-h);
 
+	//float mouseFactor = 1.;
+	////float mouseFactor = (1.-iMouse.y/iResolution.y);
+	//p.z += 2.*mouseFactor * 0.3*(noise(7.*wp));
+	////p.x += abs(p.y); //beautiful star shaped
+	//p.z += mouseFactor * 0.1*exp2(-abs(p.y)); //middle ridge
+
+	vec3 diskPoint = diskP(p);
+	color = diskPoint.z <= 0. ? vec3(1.) : vec3(1., 0.2, 0.2);
 	return diskD(p);
 }
 
 //flower in the xy plane
 const uint NB_PETALS = 5u;
-float jasmin(in float r, in float maturity, in vec3 p, in vec3 wp)
+float jasmin(in float r, in float maturity, in vec3 p, in vec3 wp, out vec3 color)
 {
-	//return petal(r, maturity, rotateY(0.5*PI, p), wp);
+	//if(DEBUG_PETAL)
+		return petal(r, maturity, rotateY(0.5*PI, p), wp, color);
 
 	float d = 2.*r;
 	for(uint i = 0u; i < NB_PETALS; i++)
-		d = min(d, petal(r, maturity, rotateZ(float(i)/float(NB_PETALS)*2.*PI, p), wp));
+	{
+		vec3 newColor = vec3(0.);
+		float newD = petal(r, maturity, rotateZ(float(i)/float(NB_PETALS)*2.*PI, p), wp, newColor);
+		if(newD < d)
+		{
+			d = newD;
+			color = newColor;
+		}
+	}
+
+	float sd = sphereD(vec3(0), 0.01, p);
+	if(sd < d)
+	{
+		color = vec3(1., 1., 0.);
+		d = sd;
+	}
+
 	return d;
 }
 
-float jasminD(in vec3 c, in float r, in vec3 orientation, in float maturity, in vec3 p)
+float jasminD(in vec3 c, in float r, in vec3 orientation, in float maturity, in vec3 p, out vec3 color)
 {
-	return jasmin(r, maturity, p - c, p); //todo: p orientation transform
+	return jasmin(r, maturity, p - c, p, color); //todo: p orientation transform
 }
 
-float map(in vec3 p)
+float map(in vec3 p, out vec3 color)
 {
 	float radius = 0.15;
 	//float maturity = 2.*iMouse.x/iResolution.x;
-	//float maturity = 0.3;
-	float maturity = 0.;
+	//float maturity = cos(iTime);
+	float maturity = 1.3;
+	//float maturity = 0.;
 	//float maturity = cos(1. + 0.3*iTime);//2.*iMouse.x/iResolution.x;
-	return jasminD(vec3(0, 0, -0.1), radius, vec3(0, 0, 1), maturity, p);
+	return jasminD(vec3(0, 0, -0.1), radius, vec3(0, 0, 1), maturity, p, color);
+}
+float map(in vec3 p)
+{
+	vec3 color;
+	return map(p, color);
 }
 
 //----------------------------------------------------
@@ -339,7 +420,6 @@ void debugSDF(out vec4 fragColor, in vec2 fragCoord)
 	p += vec3(0., 0., -0.1);
 
 	//float d = sphereD(p);
-	//float d = bentBox(p, vec3(0.1));
 	float d = map(p);
 
 	//Coloring
@@ -364,7 +444,11 @@ void debugSDF(out vec4 fragColor, in vec2 fragCoord)
 }
 void mainImage(out vec4 fragColor, in vec2 fragCoord)
 {
-	//debugSDF(fragColor, fragCoord); return;
+	if(DEBUG_PETAL)
+	{
+		debugSDF(fragColor, fragCoord);
+		return;
+	}
 
 	vec3 ro;
 	vec3 rd;
@@ -375,6 +459,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 	{
 		vec3 normal = calcNormal(intersection, 0.0001);
 		vec3 color = 0.5 + 0.5*normal;
+		map(intersection, color);
 		vec3 lightDir =
 			vec3(0., 0., 1.);
 			//normalize(vec3(1.));
