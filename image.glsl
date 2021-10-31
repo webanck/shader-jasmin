@@ -7,7 +7,18 @@ vec2 cartesianToPolar(in vec2 p)
 	float theta = atan(p.y, p.x);
 	return vec2(r, theta);
 }
-
+float max3(vec3 v)
+{
+	return max(max(v.x, v.y), v.z);
+}
+float min3(vec3 v)
+{
+	return min(min(v.x, v.y), v.z);
+}
+float sqr(float x)
+{
+	return x*x;
+};
 
 //https://www.shadertoy.com/view/4dffRH
 vec3 hash( vec3 p ) // replace this by something better. really. do
@@ -77,7 +88,55 @@ float noise( in vec3 p )
 						  dot( hash( i + vec3(1.0,1.0,1.0) ), f - vec3(1.0,1.0,1.0) ), u.x), u.y), u.z );
 }
 
+//https://iquilezles.org/www/articles/distfunctions/distfunctions.htm
+float sdRoundBox( vec3 p, vec3 b, float r )
+{
+  vec3 q = abs(p) - b;
+  return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0) - r;
+}
+float sdRoundedCylinder( vec3 p, float ra, float rb, float h )
+{
+  vec2 d = vec2( length(p.xz)-2.0*ra+rb, abs(p.y) - h );
+  return min(max(d.x,d.y),0.0) + length(max(d,0.0)) - rb;
+}
+float dot2( in vec3 v ) { return dot(v,v); }
+float udQuad( vec3 p, vec3 a, vec3 b, vec3 c, vec3 d )
+{
+  vec3 ba = b - a; vec3 pa = p - a;
+  vec3 cb = c - b; vec3 pb = p - b;
+  vec3 dc = d - c; vec3 pc = p - c;
+  vec3 ad = a - d; vec3 pd = p - d;
+  vec3 nor = cross( ba, ad );
 
+  return sqrt(
+    (sign(dot(cross(ba,nor),pa)) +
+     sign(dot(cross(cb,nor),pb)) +
+     sign(dot(cross(dc,nor),pc)) +
+     sign(dot(cross(ad,nor),pd))<3.0)
+     ?
+     min( min( min(
+     dot2(ba*clamp(dot(ba,pa)/dot2(ba),0.0,1.0)-pa),
+     dot2(cb*clamp(dot(cb,pb)/dot2(cb),0.0,1.0)-pb) ),
+     dot2(dc*clamp(dot(dc,pc)/dot2(dc),0.0,1.0)-pc) ),
+     dot2(ad*clamp(dot(ad,pd)/dot2(ad),0.0,1.0)-pd) )
+     :
+     dot(nor,pa)*dot(nor,pa)/dot2(nor) );
+}
+float opSmoothUnion( float d1, float d2, float k )
+{
+    float h = clamp( 0.5 + 0.5*(d2-d1)/k, 0.0, 1.0 );
+    return mix( d2, d1, h ) - k*h*(1.0-h);
+}
+float opSmoothSubtraction( float d1, float d2, float k )
+{
+    float h = clamp( 0.5 - 0.5*(d2+d1)/k, 0.0, 1.0 );
+    return mix( d2, -d1, h ) + k*h*(1.0-h);
+}
+float opSmoothIntersection( float d1, float d2, float k )
+{
+    float h = clamp( 0.5 - 0.5*(d2-d1)/k, 0.0, 1.0 );
+    return mix( d2, d1, h ) + k*h*(1.0-h);
+}
 
 
 
@@ -118,6 +177,8 @@ float sphereD(in vec3 c, in float r, in vec3 p)
 //a disk of unit radius in the xy plane
 float diskD(in vec3 p)
 {
+	//return sdRoundedCylinder(p.xzy, 1., 0.05, 0.01);
+
 	float r2 = dot(p.xy, p.xy);
 	//Projection in the disk, closest is disk surface.
 	if(r2 < 1.0) return abs(p.z);
@@ -157,9 +218,9 @@ void spiralifyElongation(inout vec2 p, in float radius, in float elongationFacto
 	vec2 mouseFactors = iMouse.xy/iResolution.xy;
 	mouseFactors.y = 1. - mouseFactors.y;
 
-	const float a = -0.25 * (mouseFactors.x -0.5);
-	const float arcLength = abs(elongationFactor)*radius;
-	const float b = sign(elongationFactor)*radius/sqrt(arcLength*arcLength - radius*radius);
+	float a = -0.25 * (mouseFactors.x -0.5);
+	float arcLength = abs(elongationFactor)*radius;
+	float b = sign(elongationFactor)*radius/sqrt(arcLength*arcLength - radius*radius);
 
 	spiralify(p, a, b, radius);
 }
@@ -168,8 +229,8 @@ float spiralifyAngle(inout vec2 p, in float radius, in float angle)
 	vec2 mouseFactors = iMouse.xy/iResolution.xy;
 	mouseFactors.y = 1. - mouseFactors.y;
 
-	const float a = -0.25 * (mouseFactors.x -0.5);
-	const float b = log(radius/a) / angle;
+	float a = -0.25 * (mouseFactors.x -0.5);
+	float b = log(radius/a) / angle;
 
 	//p = rotate(-angle, p);
 	//p.y -= -0.5*radius;
@@ -216,14 +277,26 @@ float spiralD(in vec2 p, in float a, in float b, in float radius)
 
 
 //----------------------------------------------------
+#define TABLE 0u
+#define FLASK 1u
+#define LABEL 2u
+#define PISTIL 3u
+#define PETAL 4u
+#define SEPAL 5u
+#define STEM 6u
+#define LEAF 7u
+
+struct Hit
+{
+	float d;
+	vec3 uv;
+	vec3 p;
+	uint m;
+};
 
 //maturity in [0, 2]
-float petal(in float r, in float maturity, in vec3 p, in vec3 wp, out vec3 color)
+Hit petal(in float r, in float maturity, in vec3 p, in vec3 wp)
 {
-	//a sphere describing the extremity of the petal trajectory (rotation) through maturation
-	//vec3 c = vec3(0, 0, r);
-	//return sphereD(c, 0.1*r, rotateY(0.5*maturity*PI, p));
-
 	//TODO: how to create creases/ridges in the middle of the petal as this is doing at a certain angle ?
 	//p.z += 0.7*abs(noise(p));
 
@@ -232,24 +305,27 @@ float petal(in float r, in float maturity, in vec3 p, in vec3 wp, out vec3 color
 	//spiralify(p.xz, 13.3);
 	////TODO: find why approximatively 13.3 ?
 	//p.xz += vec2(0.3, -0.);
-
 	//Big spiral at the origin of the petal.
-	//const float scaleFactor = 3.*(1. - iMouse.y/iResolution.y);
+	//float scaleFactor = 3.*(1. - iMouse.y/iResolution.y);
 	//p.xz /= scaleFactor;
 	////spiralify(p.xz, 13.3); //approx 13.3 with small spiral
 	//spiralify(p.xz, 6.);
 	//p.xz *= scaleFactor;
-
+	//
 	//spiralifyAngle(p.xz, 0.1, -2.*PI);
 	//scale
-	p /= r*vec3(1, 0.5, 1.);
-	//float b = spiralifyAngle(p.xz, 1., -2.*PI);
+	vec3 scaling = r*vec3(1, 0.5, 1.);
+	p /= scaling;
+	//float b = spiralifyAngle(p.xz, 2., -2.*PI);
 	//spiralifyElongation(p.xz, 3., 1.1);
 	//rotate
-	//p = rotateY((-0.5 + 0.5*maturity)*PI, p);
+	p = rotateY((-0.5 + 0.5*maturity)*PI, p);
+	//p = rotateY(-atan(1./b), p);
 	//shift
-	//p.x -= 1.;
+	p.x -= 1.;
 
+	//spiral SDF
+	/*
 	color = vec3(1.);
 	float spid = spiralD(p.xz, 1., 0.5, maturity);
 	//float sphd = 0.01*length(p);
@@ -257,83 +333,211 @@ float petal(in float r, in float maturity, in vec3 p, in vec3 wp, out vec3 color
 	const float k = 0.005;
 	float h = clamp(0.5 - 0.5*(spid-sphd)/k, 0.0, 1.0 );
 	return mix( spid, sphd, h ) + k*h*(1.0-h);
+	*/
 
-	//float mouseFactor = 1.;
-	////float mouseFactor = (1.-iMouse.y/iResolution.y);
-	//p.z += 2.*mouseFactor * 0.3*(noise(7.*wp));
-	////p.x += abs(p.y); //beautiful star shaped
-	//p.z += mouseFactor * 0.1*exp2(-abs(p.y)); //middle ridge
+	float mouseFactor = 1.;
+	//float mouseFactor = (1.-iMouse.y/iResolution.y);
+	p.z += 2.*mouseFactor * 0.3*(noise(7.*wp));
+	//p.x += abs(p.y); //beautiful star shaped
+	p.z += mouseFactor * 0.1*exp2(-abs(p.y)); //middle ridge
 
-	vec3 diskPoint = diskP(p);
-	color = diskPoint.z <= 0. ? vec3(1.) : vec3(1., 0.2, 0.2);
-	return diskD(p);
+	Hit hit;
+	hit.d = diskD(p)*min3(scaling);
+	hit.uv = diskP(p);
+	hit.m = PETAL;
+	return hit;
 }
 
 //flower in the xy plane
 const uint NB_PETALS = 5u;
-float jasmin(in float r, in float maturity, in vec3 p, in vec3 wp, out vec3 color)
+Hit jasmin(in float r, in float maturity, in vec3 p, in vec3 wp)
 {
-	//if(DEBUG_PETAL)
-		return petal(r, maturity, rotateY(0.5*PI, p), wp, color);
+	if(DEBUG_PETAL)
+		return petal(r, maturity, rotateY(0.5*PI, p), wp);
 
-	float d = 2.*r;
+	Hit hit;
+	hit.d = 2.*r;
 	for(uint i = 0u; i < NB_PETALS; i++)
 	{
-		vec3 newColor = vec3(0.);
-		float newD = petal(r, maturity, rotateZ(float(i)/float(NB_PETALS)*2.*PI, p), wp, newColor);
-		if(newD < d)
-		{
-			d = newD;
-			color = newColor;
-		}
+		Hit newHit = petal(r, maturity, rotateZ(float(i)/float(NB_PETALS)*2.*PI, p), wp);
+		if(newHit.d < hit.d)
+			hit = newHit;
 	}
 
 	float sd = sphereD(vec3(0), 0.01, p);
-	if(sd < d)
+	if(sd < hit.d)
 	{
-		color = vec3(1., 1., 0.);
-		d = sd;
+		hit.d = sd;
+		hit.m = PISTIL;
 	}
 
-	return d;
+	return hit;
 }
 
-float jasminD(in vec3 c, in float r, in vec3 orientation, in float maturity, in vec3 p, out vec3 color)
+Hit jasminD(in vec3 c, in float r, in vec3 orientation, in float maturity, in vec3 p)
 {
-	return jasmin(r, maturity, p - c, p, color); //todo: p orientation transform
+	return jasmin(r, maturity, p - c, p); //todo: p orientation transform
 }
 
-float map(in vec3 p, out vec3 color)
+//https://github.com/ssloy/tinyraytracer/wiki/Part-3:-shadertoy
+#define JFIGW 32u
+#define JFIGH 18u
+uint[] jfig_bitfield = uint[](
+	0x0u,0x0u,0x0u,0xf97800u,0x90900u,0xc91800u,0x890900u,0xf90900u,0x180u,
+	//0x0u, 0x30e30e0u, 0x4904900u, 0x49e49e0u, 0x4824820u, 0x31e31e0u, 0x0u,0x0u,0x0u
+	  0x0u, 0x40e30e0u, 0x4104900u, 0x41e49e0u, 0x4024820u, 0x41e31e0u, 0x0u,0x0u,0x0u
+);
+bool jfig(in vec2 uv)
 {
+	uvec2 ij = uvec2(uv * vec2(JFIGW, JFIGH) + (0.5, 0.));
+	uint id = ij.x + (JFIGH-1u-ij.y)*JFIGW;
+	if(id>=JFIGW*JFIGH) return false;
+	return 0u != (jfig_bitfield[id/32u] & (1u << (id&31u)));
+}
+
+Hit flaskD(in vec3 c, in vec3 p)
+{
+	p -= c;
+
+	Hit hit;
+	hit.d = 1000.;
+	float d;
+
+	//Table.
+	d = diskD(rotateX(0.5*PI, p*3.)-vec3(0., 0., -0.35)) / 3.;
+	if(d < hit.d)
+	{
+		hit.d = d;
+		hit.m = TABLE;
+	}
+
+	//Flask.
+	p = rotateY(-0.2*PI, p); //small rotation of the flask
+	vec3 diag = vec3(0.1, 0.1, 0.05);
+	d = sdRoundBox(p, diag, 0.01);
+	if(d < hit.d)
+	{
+		hit.d = d;
+		hit.m = FLASK;
+	}
+
+	//Label.
+	//p -= -1.5*diag.z;
+	float xmin = -0.8;
+	float xmax =  0.8;
+	float ymin = -0.8;
+	float ymax =  0.5;
+	float z = -1.25;
+	vec3 pa = vec3(xmin, ymin, z) * diag;
+	vec3 pb = vec3(xmin, ymax, z) * diag;
+	vec3 pc = vec3(xmax, ymax, z) * diag;
+	vec3 pd = vec3(xmax, ymin, z) * diag;
+	d = udQuad(p, pa, pb, pc, pd);
+	if(d < hit.d)
+	{
+		hit.d = d;
+		hit.m = LABEL;
+		hit.uv.xy = (p.xy/diag.xy - vec2(xmin, ymin))/vec2(xmax - xmin, ymax - ymin);
+		hit.uv.x = 1. - hit.uv.x;
+	}
+
+	return hit;
+}
+
+Hit map(in vec3 p)
+{
+	vec3 c = vec3(0.);
+
+	//Flask and table.
+	Hit fHit = flaskD(c, p);
+
+	//float radius = 0.15;
 	float radius = 0.15;
 	//float maturity = 2.*iMouse.x/iResolution.x;
 	//float maturity = cos(iTime);
 	float maturity = 1.3;
 	//float maturity = 0.;
 	//float maturity = cos(1. + 0.3*iTime);//2.*iMouse.x/iResolution.x;
-	return jasminD(vec3(0, 0, -0.1), radius, vec3(0, 0, 1), maturity, p, color);
+	c = vec3(-0.2, 0.2, 0.)*3.;
+	Hit jHit = jasminD(c, radius, vec3(0, 0, 1), maturity, p*3.);
+	jHit.d /= 3.;
+
+	if(fHit.d < jHit.d)
+		return fHit;
+	return jHit;
 }
-float map(in vec3 p)
+vec3 shade(in Hit hit)
 {
-	vec3 color;
-	return map(p, color);
+	vec3 color = vec3(0.);
+	switch(hit.m)
+	{
+		case TABLE:
+			color = 2.*vec3(32.5, 15.6, 0.)/256.;
+			break;
+		case FLASK:
+			color = vec3(0.5);
+			break;
+		case LABEL:
+			//color = vec3(0., 0., 1.);
+			//color = vec3(hit.uv.xy, 1.);
+			color = vec3(jfig(hit.uv.xy));
+			break;
+		case PISTIL:
+			color = vec3(1., 1., 0.);
+			break;
+		case PETAL:
+			color = hit.uv.z <= 0. ? vec3(1.) : vec3(1., 0.2, 0.2);
+			break;
+	}
+	return color;
 }
 
 //----------------------------------------------------
 
-// http://iquilezles.org/www/articles/normalsSDF/normalsSDF.htm
 //#define ZERO 0
 #define ZERO (min(int(iTime),0))
+#define ZEROu (uint(min(int(iTime),0)))
+// http://iquilezles.org/www/articles/smin/smin.htm
+vec3 smax( vec3 a, vec3 b, float k )
+{
+    vec3 h = max(k-abs(a-b),0.0);
+    return max(a, b) + h*h*0.25/k;
+}
+vec3 background( in vec3 d )
+{
+	return vec3(0.2, 0.8, 0.2);
+
+    // cheap cubemap
+    vec3 n = abs(d);
+    vec2 uv = (n.x>n.y && n.x>n.z) ? d.yz/d.x: 
+              (n.y>n.x && n.y>n.z) ? d.zx/d.y:
+                                     d.xy/d.z;
+    // fancy blur
+    vec3  col = vec3( 0.0 );
+    for( int i=ZERO; i<200; i++ )
+    {
+        float h = float(i)/200.0;
+        float an = 31.0*6.2831*h;
+        vec2  of = vec2( cos(an), sin(an) ) * h;
+
+        vec3 tmp = vec3(noise(vec3(uv*0.25 + 0.0075*of, 0.)));//;texture( iChannel2, uv*0.25 + 0.0075*of, 4.0 ).yxz;
+        col = smax( col, tmp, 0.5 );
+    }
+    
+    return pow(col,vec3(3.5,3.0,6.0))*0.2;
+}
+
+// http://iquilezles.org/www/articles/normalsSDF/normalsSDF.htm
 vec3 calcNormal( in vec3 pos, in float eps )
 {
 	vec4 kk;
 #if 0
 	vec2 e = vec2(1.0,-1.0)*0.5773*eps;
 	return normalize(
-		e.xyy*map(pos + e.xyy) +
-		e.yyx*map(pos + e.yyx) +
-		e.yxy*map(pos + e.yxy) +
-		e.xxx*map(pos + e.xxx)
+		e.xyy*map(pos + e.xyy).d +
+		e.yyx*map(pos + e.yyx).d +
+		e.yxy*map(pos + e.yxy).d +
+		e.xxx*map(pos + e.xxx).d
 	);
 #else
 	// inspired by tdhooper and klems - a way to prevent the compiler from inlining map() 4 times
@@ -341,55 +545,48 @@ vec3 calcNormal( in vec3 pos, in float eps )
 	for( int i=ZERO; i<4; i++ )
 	{
 		vec3 e = 0.5773*(2.0*vec3((((i+3)>>1)&1),((i>>1)&1),(i&1))-1.0);
-		n += e*map(pos+eps*e);
+		n += e*map(pos+eps*e).d;
 	}
 	return normalize(n);
 #endif
 }
 
-const float STEP_SIZE = 0.01;
-const float NB_STEPS = 200u;
-const float EPSILON = 1.1*STEP_SIZE;
-const float MAX_DEPTH = 10.;
-const float JACOBIAN_FACTOR = 20.;
-bool intersect(in vec3 ro, in vec3 rd, out vec3 intersection)
+const uint NB_STEPS = 128u;
+const float EPSILON = 0.001;
+const float MAX_DEPTH = 3.;
+const float JACOBIAN_FACTOR = 1.1;
+bool intersect(in vec3 ro, in vec3 rd, out Hit hit)
 {
 	float t = 0.;
-	for(uint i = 0u; i < NB_STEPS && t < MAX_DEPTH; i++)
+	for(uint i = ZEROu; i < NB_STEPS && t < MAX_DEPTH; i++)
 	{
-		intersection = ro + t*rd;
-		float d = map(intersection);
-		if(d < EPSILON) return true;
+		vec3 intersection = ro + t*rd;
+		hit = map(intersection);
+		hit.p = intersection;
 		
-		t += max(STEP_SIZE, d)/JACOBIAN_FACTOR;
+		if(hit.d < EPSILON) return true;
+		
+		t += hit.d/JACOBIAN_FACTOR;
 	}
 	return false;
 }
 
 //TODO: softshadow
+//TODO: refraction/reflection
+// Use Schlick's approximation for reflectance.
+//float reflectance(in float cosine, in float n1, in float n2)
+//{
+//	float r0 = sqr((n1 - n2)/(n1 + n2));
+//	return r0 + (1. - r0)*pow((1. - cosine), 5.);
+//}
 
 //----------------------------------------------------
 
-float obsDistance(const uint obsId)
-{
-	//Inside view.
-	if(obsId == 0u)
-		return 1.;
-	//Outside view.
-	else
-		return 8.;
-}
-mat3 observerViewMatrix(const uint obsId, vec2 mouseUV)
+mat3 observerViewMatrix(in vec2 mouseUV)
 {
 	vec2 shift = vec2(0.);
 	float a = (shift.x + mouseUV.x)*PI*2.;
 	float b = (shift.y + mouseUV.y)*PI;
-	//if (mouseUV == vec2(0)) {b = -0.2; a = 0.2;}
-	//if(obsId == 1u)
-	//{
-	//	a *= -1.;
-	//	b *= -1.;
-	//}
 	
 	vec3 camera = vec3(cos(b)*sin(a), sin(b), cos(b)*cos(a));
 	//Z vector
@@ -397,8 +594,8 @@ mat3 observerViewMatrix(const uint obsId, vec2 mouseUV)
 	//Y vector
 	vec3 x = normalize(cross(up, camera));
 	
-	//inside view
-	return obsDistance(obsId)*mat3(x, up, camera);
+	const float depth = 1.;
+	return depth*mat3(x, up, camera);
 }
 void pixelRay(in vec2 ij, out vec3 ro, out vec3 rd)
 {
@@ -407,7 +604,7 @@ void pixelRay(in vec2 ij, out vec3 ro, out vec3 rd)
 	vec2 q = (ij - 0.5*iResolution.xy)/iResolution.y;
 	rd = normalize(vec3(q, 0) - ro);
 
-	mat3 view = observerViewMatrix(0u, iMouse.xy/iResolution.xy - 0.5);
+	mat3 view = observerViewMatrix(iMouse.xy/iResolution.xy - vec2(0., 0.5));
 	ro = view[2];
 	rd = normalize(view*rd);
 }
@@ -420,7 +617,7 @@ void debugSDF(out vec4 fragColor, in vec2 fragCoord)
 	p += vec3(0., 0., -0.1);
 
 	//float d = sphereD(p);
-	float d = map(p);
+	float d = map(p).d;
 
 	//Coloring
 	//const float dMin = 0.;
@@ -442,6 +639,7 @@ void debugSDF(out vec4 fragColor, in vec2 fragCoord)
 
 	fragColor = vec4(color, 1.);
 }
+#define RENDER_AA 2u
 void mainImage(out vec4 fragColor, in vec2 fragCoord)
 {
 	if(DEBUG_PETAL)
@@ -450,20 +648,31 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 		return;
 	}
 
-	vec3 ro;
-	vec3 rd;
-	pixelRay(fragCoord.xy, ro, rd);
-	vec3 intersection;
-	bool intersects = intersect(ro, rd, intersection);
-	if(intersects)
+	fragColor = vec4(vec3(0.), 1.);
+	for(uint i = 0u; i < RENDER_AA; i++)
+	for(uint j = 0u; j < RENDER_AA; j++)
 	{
-		vec3 normal = calcNormal(intersection, 0.0001);
-		vec3 color = 0.5 + 0.5*normal;
-		map(intersection, color);
-		vec3 lightDir =
-			vec3(0., 0., 1.);
-			//normalize(vec3(1.));
-		fragColor = vec4(color * abs(dot(rd, normal)), 1.);
+		vec3 ro;
+		vec3 rd;
+		pixelRay(fragCoord.xy + (vec2(i, j) + 0.5)/vec2(RENDER_AA), ro, rd);
+		Hit hit;
+		
+		bool intersects = intersect(ro, rd, hit);
+		if(intersects)
+		{
+			vec3 normal = calcNormal(hit.p, 0.0001);
+			vec3 color = shade(hit);
+			//color = 0.5 + 0.5*normal;
+			vec3 lightDir =
+				//vec3(0., 0., 1.);
+				normalize(vec3(1., -1., 1.));
+			//check visibility/shadowing
+			intersects = intersect(hit.p + normal*2.*EPSILON, -lightDir, hit);
+			float visibility = intersects ? 0. : 1.;
+			vec3 lightIntensity = vec3(1.);
+			fragColor.xyz += color * abs(dot(rd, normal)) * (0.5 + visibility * max(0., dot(-lightDir, normal))) * lightIntensity;
+		}
+		else fragColor.xyz += background(rd);
 	}
-	else fragColor = vec4(vec3(0.), 1.);
+	fragColor.xyz /= float(RENDER_AA*RENDER_AA);
 }
