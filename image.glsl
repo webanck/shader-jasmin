@@ -18,7 +18,7 @@ float min3(vec3 v)
 float sqr(float x)
 {
 	return x*x;
-};
+}
 
 //https://www.shadertoy.com/view/4dffRH
 vec3 hash( vec3 p ) // replace this by something better. really. do
@@ -93,6 +93,21 @@ float sdRoundBox( vec3 p, vec3 b, float r )
 {
   vec3 q = abs(p) - b;
   return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0) - r;
+}
+float sdCylinder(vec3 p, vec3 a, vec3 b, float r)
+{
+    vec3  ba = b - a;
+    vec3  pa = p - a;
+    float baba = dot(ba,ba);
+    float paba = dot(pa,ba);
+    float x = length(pa*baba-ba*paba) - r*baba;
+    float y = abs(paba-baba*0.5)-baba*0.5;
+    float x2 = x*x;
+    float y2 = y*y*baba;
+
+    float d = (max(x,y)<0.0)?-min(x2,y2):(((x>0.0)?x2:0.0)+((y>0.0)?y2:0.0));
+
+    return sign(d)*sqrt(abs(d))/baba;
 }
 float sdRoundedCylinder( vec3 p, float ra, float rb, float h )
 {
@@ -177,8 +192,6 @@ float sphereD(in vec3 c, in float r, in vec3 p)
 //a disk of unit radius in the xy plane
 float diskD(in vec3 p)
 {
-	//return sdRoundedCylinder(p.xzy, 1., 0.05, 0.01);
-
 	float r2 = dot(p.xy, p.xy);
 	//Projection in the disk, closest is disk surface.
 	if(r2 < 1.0) return abs(p.z);
@@ -285,6 +298,7 @@ float spiralD(in vec2 p, in float a, in float b, in float radius)
 #define SEPAL 5u
 #define STEM 6u
 #define LEAF 7u
+#define CAP 8u
 
 struct Hit
 {
@@ -404,7 +418,7 @@ Hit flaskD(in vec3 c, in vec3 p)
 	float d;
 
 	//Table.
-	d = diskD(rotateX(0.5*PI, p*3.)-vec3(0., 0., -0.35)) / 3.;
+	d = diskD(rotateX(0.5*PI, p*3.) - vec3(0., 0., -0.35)) / 3.;
 	if(d < hit.d)
 	{
 		hit.d = d;
@@ -413,8 +427,8 @@ Hit flaskD(in vec3 c, in vec3 p)
 
 	//Flask.
 	p = rotateY(-0.2*PI, p); //small rotation of the flask
-	vec3 diag = vec3(0.1, 0.1, 0.05);
-	d = sdRoundBox(p, diag, 0.01);
+	vec3 halfDiag = vec3(0.1, 0.1, 0.05);
+	d = sdRoundBox(p, halfDiag, 0.01);
 	if(d < hit.d)
 	{
 		hit.d = d;
@@ -422,23 +436,33 @@ Hit flaskD(in vec3 c, in vec3 p)
 	}
 
 	//Label.
-	//p -= -1.5*diag.z;
 	float xmin = -0.8;
 	float xmax =  0.8;
 	float ymin = -0.8;
 	float ymax =  0.5;
 	float z = -1.25;
-	vec3 pa = vec3(xmin, ymin, z) * diag;
-	vec3 pb = vec3(xmin, ymax, z) * diag;
-	vec3 pc = vec3(xmax, ymax, z) * diag;
-	vec3 pd = vec3(xmax, ymin, z) * diag;
+	vec3 pa = vec3(xmin, ymin, z) * halfDiag;
+	vec3 pb = vec3(xmin, ymax, z) * halfDiag;
+	vec3 pc = vec3(xmax, ymax, z) * halfDiag;
+	vec3 pd = vec3(xmax, ymin, z) * halfDiag;
 	d = udQuad(p, pa, pb, pc, pd);
 	if(d < hit.d)
 	{
 		hit.d = d;
 		hit.m = LABEL;
-		hit.uv.xy = (p.xy/diag.xy - vec2(xmin, ymin))/vec2(xmax - xmin, ymax - ymin);
+		hit.uv.xy = (p.xy/halfDiag.xy - vec2(xmin, ymin))/vec2(xmax - xmin, ymax - ymin);
 		hit.uv.x = 1. - hit.uv.x;
+	}
+
+	//Cap.
+	float h = 0.5*halfDiag.y;
+	p.y -= halfDiag.y;
+	d = sdCylinder(p, vec3(0), vec3(0., h, 0.), halfDiag.z);
+	if(d < hit.d)
+	{
+		hit.d = d;
+		hit.m = CAP;
+		hit.uv = p;
 	}
 
 	return hit;
@@ -487,6 +511,9 @@ vec3 shade(in Hit hit)
 			break;
 		case PETAL:
 			color = hit.uv.z <= 0. ? vec3(1.) : vec3(1., 0.2, 0.2);
+			break;
+		case CAP:
+			color = vec3(0., 0., 1.);
 			break;
 	}
 	return color;
