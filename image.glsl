@@ -1,3 +1,30 @@
+#version 430
+
+#ifdef COMPUTE_SHADER
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+//~ in vec2 vertex_texcoord;
+//~ out vec4 fragment_color;
+vec4 fragment_color;
+
+uniform vec3 mouse;
+//uniform vec3 motion;
+uniform vec2 viewport;
+
+uniform float iTime;
+
+//uniform mat4 mvpMatrix;
+uniform mat4 mvpInvMatrix;
+
+layout(binding= 0, rgba32f) coherent uniform image2D image;
+
+vec4 iMouse;
+vec2 iResolution;
+////////
+
+
+
 #define DEBUG_PETAL false
 
 
@@ -19,6 +46,96 @@ float sqr(float x)
 {
 	return x*x;
 }
+
+//-----------------------
+const bool CORRELATED_SAMPLES = false;
+/*
+//Hash functions by David Hoskins
+float hash13(vec3 p3)
+{
+	p3  = fract(p3 * HASHSCALE1);
+	p3 += dot(p3, p3.yzx + 19.19);
+	return fract((p3.x + p3.y) * p3.z);
+}
+
+vec3 hash33(vec3 p3)
+{
+	p3 = fract(p3 * HASHSCALE3);
+	p3 += dot(p3, p3.yxz+19.19);
+	return fract((p3.xxy + p3.yxx)*p3.zyx);
+}
+vec3 randSeed = vec3(0.);
+void initRandSeed(const float time, const in uvec2 pixel, const in uvec2 resolution, const uint iteration)
+{
+    if(CORRELATED_SAMPLES)
+        randSeed = vec3(time, 0., 0.);
+    else
+        randSeed = vec3(time, vec2(pixel));
+}
+float rand()
+{
+	randSeed.y+=1.4675;
+	return hash13(randSeed);
+}
+float randUniform()
+{
+	return abs(rand());
+}
+//*/
+
+//*
+//http://reedbeta.com/blog/quick-and-easy-gpu-random-numbers-in-d3d11/
+//32 bits
+uint rand_lcg(inout uint state)
+{
+	// LCG values from Numerical Recipes
+	state = 1664525u * state + 1013904223u;
+	return state;
+}
+//http://reedbeta.com/blog/quick-and-easy-gpu-random-numbers-in-d3d11/
+//32 bits
+uint rand_xorshift(inout uint state)
+{
+	// Xorshift algorithm from George Marsaglia's paper
+	state ^= (state << 13);
+	state ^= (state >> 17);
+	state ^= (state << 5);
+	return state;
+}
+//http://reedbeta.com/blog/quick-and-easy-gpu-random-numbers-in-d3d11/
+void wang_hash(inout uint seed)
+{
+	seed = (seed ^ 61u) ^ (seed >> 16u);
+	seed *= 9u;
+	seed = seed ^ (seed >> 4);
+	seed *= 0x27d4eb2du;
+	seed = seed ^ (seed >> 15);
+}
+uint randSeed = 0u;
+void initRandSeed(const float time, const uvec2 pixel, const uvec2 resolution, const uint iteration)
+{
+    uint i = iteration;
+    //uint i = uint(30.*time);
+    //
+    if(CORRELATED_SAMPLES)
+        randSeed = i;
+    else
+        randSeed = pixel.x + resolution.x*(pixel.y + resolution.y*i);
+    
+    wang_hash(randSeed);
+}
+float randUniform()
+{
+	return fract(float(
+        //rand_lcg(randSeed)
+        rand_xorshift(randSeed)
+    ) * (1.0 / 4294967296.0));
+}
+//*/
+
+//-----------------------
+
+
 
 //https://www.shadertoy.com/view/4dffRH
 vec3 hash( vec3 p ) // replace this by something better. really. do
@@ -482,7 +599,9 @@ Hit map(in vec3 p)
 	float maturity = 1.3;
 	//float maturity = 0.;
 	//float maturity = cos(1. + 0.3*iTime);//2.*iMouse.x/iResolution.x;
-	c = vec3(-0.2, 0.2, 0.)*3.;
+	//c = vec3(-0.2, 0.2, 0.)*3.;
+	c = vec3(0.2, 0.1, 0.)*3.;
+	//todo: poser la fleur devant le flacon
 	Hit jHit = jasminD(c, radius, vec3(0, 0, 1), maturity, p*3.);
 	jHit.d /= 3.;
 
@@ -496,10 +615,11 @@ vec3 shade(in Hit hit)
 	switch(hit.m)
 	{
 		case TABLE:
-			color = 2.*vec3(32.5, 15.6, 0.)/256.;
+			//color = 2.*vec3(32.5, 15.6, 0.)/256.;
+			color = vec3(1.);
 			break;
 		case FLASK:
-			color = vec3(0.5);
+			color = vec3(1.);
 			break;
 		case LABEL:
 			//color = vec3(0., 0., 1.);
@@ -513,13 +633,41 @@ vec3 shade(in Hit hit)
 			color = hit.uv.z <= 0. ? vec3(1.) : vec3(1., 0.2, 0.2);
 			break;
 		case CAP:
-			color = vec3(0., 0., 1.);
+			color = vec3(0.5);
 			break;
 	}
 	return color;
 }
 
+vec3 randomDirection(in float u, in float v)
+{
+	float longitude = 2.*PI*u;
+	float colatitude = acos(2.*v - 1.);
+	float hRadius = sin(colatitude);
+	return vec3(
+		hRadius*cos(longitude),
+		cos(colatitude),
+		hRadius*sin(longitude)
+	);
+}
+vec3 randomHemisphereDirection(in vec3 up, in float u, in float v)
+{
+	vec3 direction = randomDirection(u, v);
+	return dot(direction, up) > 0. ? direction : -direction;
+}
+vec3 randomLambertianReflection(in vec3 normal, in float u, in float v)
+{
+	vec3 vec = (normal + randomDirection(u, v));
+	//Avoiding degenerated case.
+	return length(vec) < 0.001 ? normal : normalize(vec);
+}
+
+
 //----------------------------------------------------
+
+
+
+
 
 //#define ZERO 0
 #define ZERO (min(int(iTime),0))
@@ -532,7 +680,9 @@ vec3 smax( vec3 a, vec3 b, float k )
 }
 vec3 background( in vec3 d )
 {
-	return vec3(0.2, 0.8, 0.2);
+	//return vec3(0.2, 0.8, 0.2);
+	float t = 0.5*(d.y + 1.);
+	return (1. - t)*vec3(1.) + t*vec3(.5, .7, 1.);
 
     // cheap cubemap
     vec3 n = abs(d);
@@ -591,21 +741,101 @@ bool intersect(in vec3 ro, in vec3 rd, out Hit hit)
 		hit = map(intersection);
 		hit.p = intersection;
 		
-		if(hit.d < EPSILON) return true;
+		if(abs(hit.d) < EPSILON) return true;
 		
-		t += hit.d/JACOBIAN_FACTOR;
+		t += abs(hit.d)/JACOBIAN_FACTOR;
 	}
 	return false;
 }
 
-//TODO: softshadow
-//TODO: refraction/reflection
 // Use Schlick's approximation for reflectance.
-//float reflectance(in float cosine, in float n1, in float n2)
-//{
-//	float r0 = sqr((n1 - n2)/(n1 + n2));
-//	return r0 + (1. - r0)*pow((1. - cosine), 5.);
-//}
+float reflectance(in float cosine, in float n1, in float n2)
+{
+	float r0 = sqr((n1 - n2)/(n1 + n2));
+	return r0 + (1. - r0)*pow((1. - cosine), 5.);
+}
+float reflectance(float cosine, float ratio)
+{
+	return reflectance(cosine, 1., ratio);
+}
+
+vec3 refracted(in vec3 dirIn, in vec3 normal, in float refractionIndexRatio)
+{
+	vec3 tangentialComp = refractionIndexRatio * (dirIn + dot(-dirIn, normal)*normal);
+	vec3 normalComp = -sqrt(1. - dot2(tangentialComp))*normal;
+	return tangentialComp + normalComp;
+}
+bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, inout vec3 pdf)
+{
+	vec3 color = shade(hit);
+	vec3 normal = calcNormal(hit.p, 0.0001);
+	switch(hit.m)
+	{
+		case LABEL:
+		case PISTIL:
+		case PETAL:
+		{
+			vec3 bounceDirection = randomLambertianReflection(normal, randUniform(), randUniform());
+			float p = dot(normal, bounceDirection)/PI;
+			float d = dot(normal, bounceDirection);
+			attenuation *= 1./PI * d * color;
+			ro = hit.p + normal*2.*EPSILON;
+			rd = bounceDirection;
+			pdf *= p;
+			return true;
+		}
+		case CAP:
+		{
+			vec3 reflectDirection = reflect(rd, normal);
+			ro = hit.p + normal*2.*EPSILON;
+			rd = reflectDirection;
+			return true;
+		}
+		case TABLE:
+		case FLASK:
+		{
+			const float airRefractionIndex = 1.;
+			const float glassRefractionIndex = 1.5;
+			float refractionIndexRatio = airRefractionIndex/glassRefractionIndex;
+			
+			//normal = calcNormal(hit.p - rd*2.*EPSILON, 0.0001);
+			bool backFace = dot(rd, normal) > 0.;
+			//bool backFace = hit.d < 0.;
+
+			//if(!backFace)
+			//{
+			//	ro += 2.*EPSILON+rd;
+			//	return true;
+			//}
+			//attenuation *= 0.5+0.5*normal;
+			//ro += 1000.*rd;
+			//return true;
+
+			if(backFace) //swap for backface
+			{
+				refractionIndexRatio = 1./refractionIndexRatio;
+				normal = -normal;
+			}
+			
+			float cosTheta = dot(-rd, normal);
+			//if(cosTheta < 0.) return false;
+			float sinTheta = sqrt(1. - sqr(cosTheta));
+			//Total internal reflection, or both reflection and refraction but with Schlik's approximation giving the reflectance (that cancels out by stochastic selection).
+			if(sinTheta * refractionIndexRatio > 1. || reflectance(cosTheta, refractionIndexRatio) > randUniform())
+				rd = reflect(rd, normal);
+				//return false;
+			else
+				rd = refract(rd, normal, refractionIndexRatio);
+				//rd = refracted(rd, normal, refractionIndexRatio);
+			
+			ro = hit.p - normal*2.*EPSILON;
+			attenuation *= color;
+			//pdf = Color(1, 1, 1);
+			return true;
+		}
+	}
+	return false;
+}
 
 //----------------------------------------------------
 
@@ -666,8 +896,9 @@ void debugSDF(out vec4 fragColor, in vec2 fragCoord)
 
 	fragColor = vec4(color, 1.);
 }
-#define RENDER_AA 2u
-void mainImage(out vec4 fragColor, in vec2 fragCoord)
+#define SAMPLES 4u
+#define BOUNCES 50u
+void render(out vec4 fragColor, in vec2 fragCoord)
 {
 	if(DEBUG_PETAL)
 	{
@@ -676,30 +907,59 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 	}
 
 	fragColor = vec4(vec3(0.), 1.);
-	for(uint i = 0u; i < RENDER_AA; i++)
-	for(uint j = 0u; j < RENDER_AA; j++)
+
+	vec3 ro;
+	vec3 rd;
+	pixelRay(fragCoord.xy + vec2(randUniform(), randUniform()), ro, rd);
+	vec3 attenuation = vec3(1.);
+	vec3 pdf = vec3(1.);
+
+	for(uint b = ZEROu; b < BOUNCES; b++)
 	{
-		vec3 ro;
-		vec3 rd;
-		pixelRay(fragCoord.xy + (vec2(i, j) + 0.5)/vec2(RENDER_AA), ro, rd);
 		Hit hit;
-		
-		bool intersects = intersect(ro, rd, hit);
-		if(intersects)
+		if(!intersect(ro, rd, hit))
 		{
-			vec3 normal = calcNormal(hit.p, 0.0001);
-			vec3 color = shade(hit);
-			//color = 0.5 + 0.5*normal;
-			vec3 lightDir =
-				//vec3(0., 0., 1.);
-				normalize(vec3(1., -1., 1.));
-			//check visibility/shadowing
-			intersects = intersect(hit.p + normal*2.*EPSILON, -lightDir, hit);
-			float visibility = intersects ? 0. : 1.;
-			vec3 lightIntensity = vec3(1.);
-			fragColor.xyz += color * abs(dot(rd, normal)) * (0.5 + visibility * max(0., dot(-lightDir, normal))) * lightIntensity;
+			fragColor.xyz += attenuation/pdf * background(rd);
+			break;
 		}
-		else fragColor.xyz += background(rd);
+		
+		if(!scatter(ro, rd, hit, attenuation, pdf))
+			break;
 	}
-	fragColor.xyz /= float(RENDER_AA*RENDER_AA);
 }
+
+
+
+
+void main(/*out vec4 fragColor, in vec2 fragCoordv*/)
+{
+	iMouse = vec4(mouse.xyzz);
+	iResolution = vec2(imageSize(image));
+	vec2 pixel = vec2(gl_GlobalInvocationID.xy);
+	if(any(greaterThanEqual(pixel, iResolution))) return;
+
+	vec4 oldColor = imageLoad(image, ivec2(pixel));
+	for(uint i = ZEROu; i < SAMPLES; i++)
+	{
+		initRandSeed(iTime, uvec2(pixel), uvec2(iResolution.xy), uint(oldColor.w));
+		
+		vec4 newColor;
+		render(newColor, pixel);
+
+		if(iMouse.z != 0.)
+		{
+			fragment_color = newColor;
+			imageStore(image, ivec2(pixel), fragment_color);
+			return;
+		}
+
+		float count = oldColor.a + newColor.a;
+		oldColor = vec4(oldColor.rgb + (newColor.rgb - oldColor.rgb) / count, count);
+	}
+
+	
+	fragment_color = oldColor;
+	imageStore(image, ivec2(pixel), fragment_color);
+}
+///////
+#endif
