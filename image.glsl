@@ -26,7 +26,13 @@ vec2 iResolution;
 
 
 #define DEBUG_PETAL false
-
+#define CONTROL_CAMERA true
+#define SKY true
+#define SUN true
+//
+#define SEPARATE_CAUSTICS false
+//
+#define NEE false
 
 vec2 cartesianToPolar(in vec2 p)
 {
@@ -49,41 +55,6 @@ float sqr(float x)
 
 //-----------------------
 const bool CORRELATED_SAMPLES = false;
-/*
-//Hash functions by David Hoskins
-float hash13(vec3 p3)
-{
-	p3  = fract(p3 * HASHSCALE1);
-	p3 += dot(p3, p3.yzx + 19.19);
-	return fract((p3.x + p3.y) * p3.z);
-}
-
-vec3 hash33(vec3 p3)
-{
-	p3 = fract(p3 * HASHSCALE3);
-	p3 += dot(p3, p3.yxz+19.19);
-	return fract((p3.xxy + p3.yxx)*p3.zyx);
-}
-vec3 randSeed = vec3(0.);
-void initRandSeed(const float time, const in uvec2 pixel, const in uvec2 resolution, const uint iteration)
-{
-    if(CORRELATED_SAMPLES)
-        randSeed = vec3(time, 0., 0.);
-    else
-        randSeed = vec3(time, vec2(pixel));
-}
-float rand()
-{
-	randSeed.y+=1.4675;
-	return hash13(randSeed);
-}
-float randUniform()
-{
-	return abs(rand());
-}
-//*/
-
-//*
 //http://reedbeta.com/blog/quick-and-easy-gpu-random-numbers-in-d3d11/
 //32 bits
 uint rand_lcg(inout uint state)
@@ -111,25 +82,26 @@ void wang_hash(inout uint seed)
 	seed *= 0x27d4eb2du;
 	seed = seed ^ (seed >> 15);
 }
-uint randSeed = 0u;
-void initRandSeed(const float time, const uvec2 pixel, const uvec2 resolution, const uint iteration)
+uint randState = 0u;
+void initRandState(const float time, const uvec2 pixel, const uvec2 resolution, const uint iteration)
 {
-    uint i = iteration;
-    //uint i = uint(30.*time);
-    //
-    if(CORRELATED_SAMPLES)
-        randSeed = i;
-    else
-        randSeed = pixel.x + resolution.x*(pixel.y + resolution.y*i);
-    
-    wang_hash(randSeed);
+	uint i = iteration;
+	if(CORRELATED_SAMPLES)
+		randState = i;
+	else
+		randState = pixel.x + resolution.x*(pixel.y + resolution.y*i);
+	wang_hash(randState);
+}
+float randUniform(inout uint state)
+{
+	return fract(float(
+		//rand_lcg(state)
+		rand_xorshift(state)
+	) * (1.0 / 4294967296.0));
 }
 float randUniform()
 {
-	return fract(float(
-        //rand_lcg(randSeed)
-        rand_xorshift(randSeed)
-    ) * (1.0 / 4294967296.0));
+	return randUniform(randState);
 }
 //*/
 
@@ -213,18 +185,18 @@ float sdRoundBox( vec3 p, vec3 b, float r )
 }
 float sdCylinder(vec3 p, vec3 a, vec3 b, float r)
 {
-    vec3  ba = b - a;
-    vec3  pa = p - a;
-    float baba = dot(ba,ba);
-    float paba = dot(pa,ba);
-    float x = length(pa*baba-ba*paba) - r*baba;
-    float y = abs(paba-baba*0.5)-baba*0.5;
-    float x2 = x*x;
-    float y2 = y*y*baba;
+	vec3  ba = b - a;
+	vec3  pa = p - a;
+	float baba = dot(ba,ba);
+	float paba = dot(pa,ba);
+	float x = length(pa*baba-ba*paba) - r*baba;
+	float y = abs(paba-baba*0.5)-baba*0.5;
+	float x2 = x*x;
+	float y2 = y*y*baba;
 
-    float d = (max(x,y)<0.0)?-min(x2,y2):(((x>0.0)?x2:0.0)+((y>0.0)?y2:0.0));
+	float d = (max(x,y)<0.0)?-min(x2,y2):(((x>0.0)?x2:0.0)+((y>0.0)?y2:0.0));
 
-    return sign(d)*sqrt(abs(d))/baba;
+	return sign(d)*sqrt(abs(d))/baba;
 }
 float sdRoundedCylinder( vec3 p, float ra, float rb, float h )
 {
@@ -232,6 +204,29 @@ float sdRoundedCylinder( vec3 p, float ra, float rb, float h )
   return min(max(d.x,d.y),0.0) + length(max(d,0.0)) - rb;
 }
 float dot2( in vec3 v ) { return dot(v,v); }
+float sdRoundCone(vec3 p, vec3 a, vec3 b, float r1, float r2)
+{
+	// sampling independent computations (only depend on shape)
+	vec3  ba = b - a;
+	float l2 = dot(ba,ba);
+	float rr = r1 - r2;
+	float a2 = l2 - rr*rr;
+	float il2 = 1.0/l2;
+
+	// sampling dependant computations
+	vec3 pa = p - a;
+	float y = dot(pa,ba);
+	float z = y - l2;
+	float x2 = dot2( pa*l2 - ba*y );
+	float y2 = y*y*l2;
+	float z2 = z*z*l2;
+
+	// single square root!
+	float k = sign(rr)*rr*rr*x2;
+	if( sign(z)*a2*z2 > k ) return  sqrt(x2 + z2)		*il2 - r2;
+	if( sign(y)*a2*y2 < k ) return  sqrt(x2 + y2)		*il2 - r1;
+							return (sqrt(x2*a2*il2)+y*rr)*il2 - r1;
+}
 float udQuad( vec3 p, vec3 a, vec3 b, vec3 c, vec3 d )
 {
   vec3 ba = b - a; vec3 pa = p - a;
@@ -241,39 +236,43 @@ float udQuad( vec3 p, vec3 a, vec3 b, vec3 c, vec3 d )
   vec3 nor = cross( ba, ad );
 
   return sqrt(
-    (sign(dot(cross(ba,nor),pa)) +
-     sign(dot(cross(cb,nor),pb)) +
-     sign(dot(cross(dc,nor),pc)) +
-     sign(dot(cross(ad,nor),pd))<3.0)
-     ?
-     min( min( min(
-     dot2(ba*clamp(dot(ba,pa)/dot2(ba),0.0,1.0)-pa),
-     dot2(cb*clamp(dot(cb,pb)/dot2(cb),0.0,1.0)-pb) ),
-     dot2(dc*clamp(dot(dc,pc)/dot2(dc),0.0,1.0)-pc) ),
-     dot2(ad*clamp(dot(ad,pd)/dot2(ad),0.0,1.0)-pd) )
-     :
-     dot(nor,pa)*dot(nor,pa)/dot2(nor) );
+	(sign(dot(cross(ba,nor),pa)) +
+	 sign(dot(cross(cb,nor),pb)) +
+	 sign(dot(cross(dc,nor),pc)) +
+	 sign(dot(cross(ad,nor),pd))<3.0)
+	 ?
+	 min( min( min(
+	 dot2(ba*clamp(dot(ba,pa)/dot2(ba),0.0,1.0)-pa),
+	 dot2(cb*clamp(dot(cb,pb)/dot2(cb),0.0,1.0)-pb) ),
+	 dot2(dc*clamp(dot(dc,pc)/dot2(dc),0.0,1.0)-pc) ),
+	 dot2(ad*clamp(dot(ad,pd)/dot2(ad),0.0,1.0)-pd) )
+	 :
+	 dot(nor,pa)*dot(nor,pa)/dot2(nor) );
 }
 float opSmoothUnion( float d1, float d2, float k )
 {
-    float h = clamp( 0.5 + 0.5*(d2-d1)/k, 0.0, 1.0 );
-    return mix( d2, d1, h ) - k*h*(1.0-h);
+	float h = clamp( 0.5 + 0.5*(d2-d1)/k, 0.0, 1.0 );
+	return mix( d2, d1, h ) - k*h*(1.0-h);
 }
 float opSmoothSubtraction( float d1, float d2, float k )
 {
-    float h = clamp( 0.5 - 0.5*(d2+d1)/k, 0.0, 1.0 );
-    return mix( d2, -d1, h ) + k*h*(1.0-h);
+	float h = clamp( 0.5 - 0.5*(d2+d1)/k, 0.0, 1.0 );
+	return mix( d2, -d1, h ) + k*h*(1.0-h);
 }
 float opSmoothIntersection( float d1, float d2, float k )
 {
-    float h = clamp( 0.5 - 0.5*(d2-d1)/k, 0.0, 1.0 );
-    return mix( d2, d1, h ) + k*h*(1.0-h);
+	float h = clamp( 0.5 - 0.5*(d2-d1)/k, 0.0, 1.0 );
+	return mix( d2, d1, h ) + k*h*(1.0-h);
 }
 
 
 
 
 const float PI = 3.14;
+
+#define SUN_DIRECTION normalize(vec3(-1.))
+const float SUN_INTENSITY = 314.;
+#define SUN_COLOR vec3(249, 231, 42)/256.
 
 
 vec2 rotate(in float rads, in vec2 p)
@@ -423,13 +422,14 @@ struct Hit
 	vec3 uv;
 	vec3 p;
 	uint m;
+	vec3 n;
 };
 
 //maturity in [0, 2]
-Hit petal(in float r, in float maturity, in vec3 p, in vec3 wp)
+Hit petal(in float r, in float maturity, in vec3 p, in vec3 wp, in uint i)
 {
-	//TODO: how to create creases/ridges in the middle of the petal as this is doing at a certain angle ?
-	//p.z += 0.7*abs(noise(p));
+	maturity = 1.;
+	//maturity = 2.*(1.-iMouse.y/iResolution.y);
 
 	////Small spiral at the end of the petal.
 	//p.xz -= vec2(0.3, -0.);
@@ -454,6 +454,9 @@ Hit petal(in float r, in float maturity, in vec3 p, in vec3 wp)
 	//p = rotateY(-atan(1./b), p);
 	//shift
 	p.x -= 1.;
+	//p.x -= 0.1;
+	//wang_hash(i);
+	//p.z += 0.1*randUniform(i); //displace petals
 
 	//spiral SDF
 	/*
@@ -466,48 +469,86 @@ Hit petal(in float r, in float maturity, in vec3 p, in vec3 wp)
 	return mix( spid, sphd, h ) + k*h*(1.0-h);
 	*/
 
-	float mouseFactor = 1.;
+	//float mouseFactor = 1.;
 	//float mouseFactor = (1.-iMouse.y/iResolution.y);
-	p.z += 2.*mouseFactor * 0.3*(noise(7.*wp));
+	
+	float noiseWarp = 0.3*(noise(7.*wp));
+	float r1 = distance(vec2(-1., 0.), p.xy);
+	float centerWarp = exp(-r1 * 2.);
+	p.z -= centerWarp - 2.*max(0., 1. - centerWarp)*noiseWarp;
+	
+	p.xz += vec2(-0.2, 0.1)*exp2(-abs(p.y)); //middle ridge and pointy end
+	//p.xz += clamp(2.*p.y, 0., 1.)*vec2(0., 0.1)*exp2(-abs(p.y)); //middle ridge and pointy end
+	
 	//p.x += abs(p.y); //beautiful star shaped
-	p.z += mouseFactor * 0.1*exp2(-abs(p.y)); //middle ridge
+	//if(p.x < 0.)
+	//	p.x -= 0.5*abs(p.y); //beautiful star shaped
 
 	Hit hit;
 	hit.d = diskD(p)*min3(scaling);
 	hit.uv = diskP(p);
 	hit.m = PETAL;
+
 	return hit;
 }
 
+
+void opCheapBend(inout vec3 p, in float k)
+{
+	float c = cos(k*p.x);
+	float s = sin(k*p.x);
+	mat2  m = mat2(c,-s,s,c);
+	vec3  q = vec3(m*p.xy,p.z);
+	p = q;
+}
 //flower in the xy plane
 const uint NB_PETALS = 5u;
-Hit jasmin(in float r, in float maturity, in vec3 p, in vec3 wp)
+Hit jasminD(in float r, in float maturity, in vec3 p, in vec3 wp)
 {
 	if(DEBUG_PETAL)
-		return petal(r, maturity, rotateY(0.5*PI, p), wp);
+		return petal(r, maturity, rotateY(0.5*PI, p), wp, 0u);
+
+
+	p = rotateY(0.5*PI, p);
+	opCheapBend(p, 1.);
+	p = rotateZ(0.23*PI, p);
+	p = rotateY(-0.5*PI, p);
 
 	Hit hit;
 	hit.d = 2.*r;
 	for(uint i = 0u; i < NB_PETALS; i++)
 	{
-		Hit newHit = petal(r, maturity, rotateZ(float(i)/float(NB_PETALS)*2.*PI, p), wp);
+		vec3 q = rotateZ((float(i)/float(NB_PETALS)*2. + 0.05)*PI, p);
+		Hit newHit = petal(r, maturity, q, wp, i);
 		if(newHit.d < hit.d)
 			hit = newHit;
 	}
 
-	float sd = sphereD(vec3(0), 0.01, p);
+	float sd = sphereD(vec3(0., 0., 0.28*r), 0.01, p);
 	if(sd < hit.d)
 	{
 		hit.d = sd;
 		hit.m = PISTIL;
 	}
 
-	return hit;
-}
+	//p = rotateY(0.5*PI, p);
+	//p = rotateZ(-0.05*PI, p);
+	//p = rotateY(-0.5*PI, p);
 
-Hit jasminD(in vec3 c, in float r, in vec3 orientation, in float maturity, in vec3 p)
-{
-	return jasmin(r, maturity, p - c, p); //todo: p orientation transform
+	//p = rotateY(0.5*PI, p);
+	////p += 1.*r;
+	////opCheapBend(p, 2.);
+	////p -= 1.*r;
+	//p = rotateY(-0.5*PI, p);
+
+	sd = sdRoundCone(p, vec3(0., 0., 0.6*r), vec3(0., 0., 3.*r), 0.25*r, 0.2*r);
+	if(sd < hit.d)
+	{
+		hit.d = sd;
+		hit.m = STEM;
+	}
+
+	return hit;
 }
 
 //https://github.com/ssloy/tinyraytracer/wiki/Part-3:-shadertoy
@@ -526,8 +567,9 @@ bool jfig(in vec2 uv)
 	return 0u != (jfig_bitfield[id/32u] & (1u << (id&31u)));
 }
 
-Hit flaskD(in vec3 c, in vec3 p)
+Hit map(in vec3 p)
 {
+	vec3 c = vec3(0.);
 	p -= c;
 
 	Hit hit;
@@ -582,16 +624,7 @@ Hit flaskD(in vec3 c, in vec3 p)
 		hit.uv = p;
 	}
 
-	return hit;
-}
-
-Hit map(in vec3 p)
-{
-	vec3 c = vec3(0.);
-
-	//Flask and table.
-	Hit fHit = flaskD(c, p);
-
+	//Flower
 	//float radius = 0.15;
 	float radius = 0.15;
 	//float maturity = 2.*iMouse.x/iResolution.x;
@@ -599,44 +632,49 @@ Hit map(in vec3 p)
 	float maturity = 1.3;
 	//float maturity = 0.;
 	//float maturity = cos(1. + 0.3*iTime);//2.*iMouse.x/iResolution.x;
-	//c = vec3(-0.2, 0.2, 0.)*3.;
-	c = vec3(0.2, 0.1, 0.)*3.;
-	//todo: poser la fleur devant le flacon
-	Hit jHit = jasminD(c, radius, vec3(0, 0, 1), maturity, p*3.);
+	p.y += 2.*halfDiag.y;
+	p.y -= radius/3. - 0.01;// + 0.025;
+	p.x -= 2.*halfDiag.x;
+	p.z += 1.5*halfDiag.z;
+	p = rotateY(-2.1*PI, p);
+	p = rotateZ(-0.1*PI, p);
+	//p = rotateZ(2.*PI*iMouse.x/iResolution.x, p);
+	p *= 3.;
+	Hit jHit = jasminD(radius, maturity, p, p);
 	jHit.d /= 3.;
+	if(jHit.d < hit.d)
+		return hit = jHit;
 
-	if(fHit.d < jHit.d)
-		return fHit;
-	return jHit;
+	return hit;
 }
+
 vec3 shade(in Hit hit)
 {
-	vec3 color = vec3(0.);
 	switch(hit.m)
 	{
 		case TABLE:
-			//color = 2.*vec3(32.5, 15.6, 0.)/256.;
-			color = vec3(1.);
-			break;
+			return 2.*vec3(32.5, 15.6, 0.)/256.;
+			//return vec3(1.);
+			//return SUN_COLOR;
 		case FLASK:
-			color = vec3(1.);
+			return vec3(1.);
 			break;
 		case LABEL:
-			//color = vec3(0., 0., 1.);
-			//color = vec3(hit.uv.xy, 1.);
-			color = vec3(jfig(hit.uv.xy));
-			break;
+			//return vec3(0., 0., 1.);
+			//return vec3(hit.uv.xy, 1.);
+			return vec3(jfig(hit.uv.xy));
 		case PISTIL:
-			color = vec3(1., 1., 0.);
-			break;
+			return vec3(1., 1., 0.);
 		case PETAL:
-			color = hit.uv.z <= 0. ? vec3(1.) : vec3(1., 0.2, 0.2);
-			break;
+			return vec3(1.);
+			//return hit.uv.z <= 0. ? vec3(1.) : vec3(1., 0.2, 0.2);
 		case CAP:
-			color = vec3(0.5);
-			break;
+			return vec3(1.);
+		case STEM:
+			return vec3(1.);//10.*vec3(5.7, 19., 7.9)/256.;
+		default:
+			return vec3(0);
 	}
-	return color;
 }
 
 vec3 randomDirection(in float u, in float v)
@@ -675,33 +713,28 @@ vec3 randomLambertianReflection(in vec3 normal, in float u, in float v)
 // http://iquilezles.org/www/articles/smin/smin.htm
 vec3 smax( vec3 a, vec3 b, float k )
 {
-    vec3 h = max(k-abs(a-b),0.0);
-    return max(a, b) + h*h*0.25/k;
+	vec3 h = max(k-abs(a-b),0.0);
+	return max(a, b) + h*h*0.25/k;
 }
-vec3 background( in vec3 d )
+vec3 sunlight(in vec3 d)
 {
-	//return vec3(0.2, 0.8, 0.2);
+	if(!SUN) return vec3(0);
+	return dot(-SUN_DIRECTION, d) > 0.99 ? SUN_COLOR*SUN_INTENSITY : vec3(0.);
+}
+vec3 background( in vec3 d, in bool fromSpecular )
+{
+	vec3 light = vec3(0.);
+
+	//sky
 	float t = 0.5*(d.y + 1.);
-	return (1. - t)*vec3(1.) + t*vec3(.5, .7, 1.);
+	vec3 skylight = (1. - t)*vec3(1.) + t*vec3(.5, .7, 1.);
+	if(SKY)
+		light += skylight;
 
-    // cheap cubemap
-    vec3 n = abs(d);
-    vec2 uv = (n.x>n.y && n.x>n.z) ? d.yz/d.x: 
-              (n.y>n.x && n.y>n.z) ? d.zx/d.y:
-                                     d.xy/d.z;
-    // fancy blur
-    vec3  col = vec3( 0.0 );
-    for( int i=ZERO; i<200; i++ )
-    {
-        float h = float(i)/200.0;
-        float an = 31.0*6.2831*h;
-        vec2  of = vec2( cos(an), sin(an) ) * h;
+	if(SUN)
+		light += sunlight(d);
 
-        vec3 tmp = vec3(noise(vec3(uv*0.25 + 0.0075*of, 0.)));//;texture( iChannel2, uv*0.25 + 0.0075*of, 4.0 ).yxz;
-        col = smax( col, tmp, 0.5 );
-    }
-    
-    return pow(col,vec3(3.5,3.0,6.0))*0.2;
+	return light;
 }
 
 // http://iquilezles.org/www/articles/normalsSDF/normalsSDF.htm
@@ -731,7 +764,7 @@ vec3 calcNormal( in vec3 pos, in float eps )
 const uint NB_STEPS = 128u;
 const float EPSILON = 0.001;
 const float MAX_DEPTH = 3.;
-const float JACOBIAN_FACTOR = 1.1;
+const float JACOBIAN_FACTOR = 1.5;
 bool intersect(in vec3 ro, in vec3 rd, out Hit hit)
 {
 	float t = 0.;
@@ -759,21 +792,59 @@ float reflectance(float cosine, float ratio)
 	return reflectance(cosine, 1., ratio);
 }
 
-vec3 refracted(in vec3 dirIn, in vec3 normal, in float refractionIndexRatio)
+void forcedScatter(inout vec3 rd, in Hit hit, inout vec3 attenuation, inout vec3 pdf, in vec3 dirOut)
 {
-	vec3 tangentialComp = refractionIndexRatio * (dirIn + dot(-dirIn, normal)*normal);
-	vec3 normalComp = -sqrt(1. - dot2(tangentialComp))*normal;
-	return tangentialComp + normalComp;
+	vec3 color = shade(hit);
+	vec3 normal = hit.n;
+	switch(hit.m)
+	{
+		case TABLE:
+		case LABEL:
+		case PISTIL:
+		case PETAL:
+		{
+			float p = dot(normal, dirOut)/PI;
+			float d = dot(normal, dirOut);
+			attenuation *= 1./PI * d * color;
+			rd = dirOut;
+			pdf *= p;
+			return;
+		}
+		case FLASK:
+		case CAP:
+		{
+			attenuation = vec3(0.);
+			pdf = vec3(0.);
+			return;
+		}
+	}
+}
+bool isDelta(in uint m)
+{
+	switch(m)
+	{
+		case TABLE:
+		case LABEL:
+		case PISTIL:
+		case PETAL:
+		case STEM:
+			return false;
+		case FLASK:
+		case CAP:
+			return true;
+	}
 }
 bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, inout vec3 pdf)
 {
 	vec3 color = shade(hit);
-	vec3 normal = calcNormal(hit.p, 0.0001);
+	vec3 normal = hit.n;
 	switch(hit.m)
 	{
+		case TABLE:
 		case LABEL:
 		case PISTIL:
 		case PETAL:
+		case STEM:
 		{
 			vec3 bounceDirection = randomLambertianReflection(normal, randUniform(), randUniform());
 			float p = dot(normal, bounceDirection)/PI;
@@ -784,33 +855,23 @@ bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, i
 			pdf *= p;
 			return true;
 		}
-		case CAP:
-		{
-			vec3 reflectDirection = reflect(rd, normal);
-			ro = hit.p + normal*2.*EPSILON;
-			rd = reflectDirection;
-			return true;
-		}
-		case TABLE:
+		//mirror
+		//{
+		//	vec3 reflectDirection = reflect(rd, normal);
+		//	attenuation *= color;
+		//	ro = hit.p + normal*2.*EPSILON;
+		//	rd = reflectDirection;
+		//	return true;
+		//}
 		case FLASK:
+		case CAP:
 		{
 			const float airRefractionIndex = 1.;
 			const float glassRefractionIndex = 1.5;
 			float refractionIndexRatio = airRefractionIndex/glassRefractionIndex;
 			
-			//normal = calcNormal(hit.p - rd*2.*EPSILON, 0.0001);
 			bool backFace = dot(rd, normal) > 0.;
 			//bool backFace = hit.d < 0.;
-
-			//if(!backFace)
-			//{
-			//	ro += 2.*EPSILON+rd;
-			//	return true;
-			//}
-			//attenuation *= 0.5+0.5*normal;
-			//ro += 1000.*rd;
-			//return true;
-
 			if(backFace) //swap for backface
 			{
 				refractionIndexRatio = 1./refractionIndexRatio;
@@ -818,19 +879,25 @@ bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, i
 			}
 			
 			float cosTheta = dot(-rd, normal);
-			//if(cosTheta < 0.) return false;
 			float sinTheta = sqrt(1. - sqr(cosTheta));
+			float reflectedRatio = sinTheta * refractionIndexRatio > 1. ? 1. : reflectance(cosTheta, refractionIndexRatio);
+			
 			//Total internal reflection, or both reflection and refraction but with Schlik's approximation giving the reflectance (that cancels out by stochastic selection).
-			if(sinTheta * refractionIndexRatio > 1. || reflectance(cosTheta, refractionIndexRatio) > randUniform())
+			if(reflectedRatio == 1. || reflectedRatio > randUniform())
+			{
+				attenuation *= reflectedRatio;
+				pdf *= reflectedRatio;
 				rd = reflect(rd, normal);
-				//return false;
+			}
 			else
+			{
+				attenuation *= (1. - reflectedRatio);
+				pdf *= (1. - reflectedRatio);
 				rd = refract(rd, normal, refractionIndexRatio);
-				//rd = refracted(rd, normal, refractionIndexRatio);
+			}
 			
 			ro = hit.p - normal*2.*EPSILON;
 			attenuation *= color;
-			//pdf = Color(1, 1, 1);
 			return true;
 		}
 	}
@@ -851,7 +918,7 @@ mat3 observerViewMatrix(in vec2 mouseUV)
 	//Y vector
 	vec3 x = normalize(cross(up, camera));
 	
-	const float depth = 1.;
+	const float depth = 0.75;
 	return depth*mat3(x, up, camera);
 }
 void pixelRay(in vec2 ij, out vec3 ro, out vec3 rd)
@@ -861,7 +928,7 @@ void pixelRay(in vec2 ij, out vec3 ro, out vec3 rd)
 	vec2 q = (ij - 0.5*iResolution.xy)/iResolution.y;
 	rd = normalize(vec3(q, 0) - ro);
 
-	mat3 view = observerViewMatrix(iMouse.xy/iResolution.xy - vec2(0., 0.5));
+	mat3 view = observerViewMatrix(CONTROL_CAMERA ? iMouse.xy/iResolution.xy - vec2(0., 0.5) : vec2(0.5, 0.1));
 	ro = view[2];
 	rd = normalize(view*rd);
 }
@@ -877,17 +944,6 @@ void debugSDF(out vec4 fragColor, in vec2 fragCoord)
 	float d = map(p).d;
 
 	//Coloring
-	//const float dMin = 0.;
-	//const float dMax = 2.;
-	//d = (clamp(d, dMin, dMax) - dMin)/(dMax - dMin);
-	//vec3 color = vec3(d);
-	//
-	////https://www.shadertoy.com/view/3t33WH
-	//vec3 color = (d<0.0) ? vec3(0.6,0.8,1.0) : vec3(0.9,0.6,0.3);
-	//color *= 1.0 - exp(-9.0*abs(d));
-	//color *= 1.0 + 0.2*cos(128.0*abs(d));
-	//color = mix( color, vec3(1.0), 1.0-smoothstep(0.0,0.015,abs(d)) );
-	//
 	//https://www.shadertoy.com/view/3ltSW2
 	vec3 color = vec3(1.0) - sign(d)*vec3(0.1,0.4,0.7);
 	color *= 1.0 - exp(-3.0*abs(d));
@@ -896,6 +952,7 @@ void debugSDF(out vec4 fragColor, in vec2 fragCoord)
 
 	fragColor = vec4(color, 1.);
 }
+
 #define SAMPLES 4u
 #define BOUNCES 50u
 void render(out vec4 fragColor, in vec2 fragCoord)
@@ -913,14 +970,36 @@ void render(out vec4 fragColor, in vec2 fragCoord)
 	pixelRay(fragCoord.xy + vec2(randUniform(), randUniform()), ro, rd);
 	vec3 attenuation = vec3(1.);
 	vec3 pdf = vec3(1.);
+	bool delta = true;
 
-	for(uint b = ZEROu; b < BOUNCES; b++)
+	for(uint b = BOUNCES; b > ZEROu; b--)
 	{
 		Hit hit;
 		if(!intersect(ro, rd, hit))
 		{
-			fragColor.xyz += attenuation/pdf * background(rd);
+			fragColor.xyz += attenuation/pdf * background(rd, delta);
 			break;
+		}
+		
+		hit.n = calcNormal(hit.p - rd*2.*EPSILON, 0.0001);
+		delta = isDelta(hit.m);
+		
+		//NEE
+		if(NEE && !delta)
+		{
+			vec3 neAttenuation = attenuation;
+			vec3 nePdf = pdf*0.5/PI;
+			vec3 outDir = randomHemisphereDirection(hit.n, randUniform(), randUniform());
+			
+			Hit neHit = hit;
+			neHit.p += normalize(hit.n - rd)*1.*EPSILON;
+			//neHit.p += hit.n*2.*EPSILON;
+			//neHit.p += -outDir*2.*EPSILON;
+			
+			forcedScatter(rd, neHit, neAttenuation, nePdf, outDir);
+			
+			if(!intersect(neHit.p, -outDir, neHit))
+				fragColor.xyz += neAttenuation/nePdf * background(outDir, delta);
 		}
 		
 		if(!scatter(ro, rd, hit, attenuation, pdf))
@@ -941,10 +1020,14 @@ void main(/*out vec4 fragColor, in vec2 fragCoordv*/)
 	vec4 oldColor = imageLoad(image, ivec2(pixel));
 	for(uint i = ZEROu; i < SAMPLES; i++)
 	{
-		initRandSeed(iTime, uvec2(pixel), uvec2(iResolution.xy), uint(oldColor.w));
+		initRandState(iTime, uvec2(pixel), uvec2(iResolution.xy), uint(oldColor.w));
 		
 		vec4 newColor;
 		render(newColor, pixel);
+
+		//Avoid degenerate paths.
+		if(any(isnan(newColor)) || any(lessThan(newColor, vec4(0.))))
+			continue;
 
 		if(iMouse.z != 0.)
 		{
