@@ -302,7 +302,7 @@ Hit jasminD(in float r, in vec3 p, in vec3 wp)
 {
 	p = rotateY(0.5*PI, p);
 	opCheapBend(p, 1.);
-	p = rotateZ(0.23*PI, p);
+	p = rotateZ(0.22*PI, p);
 	p = rotateY(-0.5*PI, p);
 
 	Hit hit;
@@ -407,11 +407,11 @@ Hit map(in vec3 p)
 	//Flower
 	float radius = 0.15;
 	p.y += 2.*halfDiag.y;
-	p.y -= radius/3. - 0.01;
+	p.y -= radius/3. - 0.011;
 	p.x -= 2.*halfDiag.x;
 	p.z += 1.5*halfDiag.z;
 	p = rotateY(-2.1*PI, p);
-	p = rotateZ(-0.1*PI, p);
+	p = rotateZ(-0.06*PI, p);
 	p *= 3.;
 	Hit jHit = jasminD(radius, p, p);
 	jHit.d /= 3.;
