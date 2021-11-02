@@ -309,7 +309,7 @@ Hit jasminD(in float r, in vec3 p, in vec3 wp)
 	hit.d = 2.*r;
 	for(uint i = 0u; i < NB_PETALS; i++)
 	{
-		vec3 q = rotateZ((float(i)/float(NB_PETALS)*2. + 0.05)*PI, p);
+		vec3 q = rotateZ(2.*PI*float(i)/float(NB_PETALS), p);
 		Hit newHit = petal(r, q, wp, i);
 		if(newHit.d < hit.d)
 			hit = newHit;
@@ -411,7 +411,7 @@ Hit map(in vec3 p)
 	p.x -= 2.*halfDiag.x;
 	p.z += 1.5*halfDiag.z;
 	p = rotateY(-2.1*PI, p);
-	p = rotateZ(-0.06*PI, p);
+	p = rotateZ(-0.03*PI, p);
 	p *= 3.;
 	Hit jHit = jasminD(radius, p, p);
 	jHit.d /= 3.;
