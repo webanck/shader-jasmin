@@ -475,7 +475,7 @@ vec3 sunlight(in vec3 d)
 {
 	return dot(-SUN_DIRECTION, d) > 0.99 ? SUN_COLOR*SUN_INTENSITY : vec3(0.);
 }
-vec3 background( in vec3 d, in bool fromSpecular )
+vec3 background(in vec3 d)
 {
 	vec3 light = vec3(0.);
 
@@ -536,21 +536,6 @@ float reflectance(float cosine, float ratio)
 	return reflectance(cosine, 1., ratio);
 }
 
-bool isDelta(in uint m)
-{
-	switch(m)
-	{
-		case TABLE:
-		case LABEL:
-		case PISTIL:
-		case PETAL:
-		case STEM:
-			return false;
-		case FLASK:
-		case CAP:
-			return true;
-	}
-}
 bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, inout vec3 pdf)
 {
 	vec3 color = shade(hit);
@@ -656,19 +641,17 @@ void render(out vec4 fragColor, in vec2 fragCoord)
 	pixelRay(fragCoord.xy + vec2(randUniform(), randUniform()), ro, rd);
 	vec3 attenuation = vec3(1.);
 	vec3 pdf = vec3(1.);
-	bool delta = true;
 
 	for(uint b = BOUNCES; b > ZEROu; b--)
 	{
 		Hit hit;
 		if(!intersect(ro, rd, hit))
 		{
-			fragColor.xyz += attenuation/pdf * background(rd, delta);
+			fragColor.xyz += attenuation/pdf * background(rd);
 			break;
 		}
 		
 		hit.n = calcNormal(hit.p - rd*2.*EPSILON, 0.0001);
-		delta = isDelta(hit.m);
 		
 		
 		if(!scatter(ro, rd, hit, attenuation, pdf))
