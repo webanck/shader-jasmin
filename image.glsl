@@ -507,8 +507,8 @@ vec3 calcNormal( in vec3 pos, in float eps )
 
 const uint NB_STEPS = 128u;
 const float EPSILON = 0.001;
-const float MAX_DEPTH = 3.;
-const float JACOBIAN_FACTOR = 1.5;
+const float MAX_DEPTH = 1.;
+const float JACOBIAN_FACTOR = 1.1;
 bool intersect(in vec3 ro, in vec3 rd, out Hit hit)
 {
 	float t = 0.;
