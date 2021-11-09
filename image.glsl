@@ -35,12 +35,19 @@ const float PI = 3.14;
 const float SUN_INTENSITY = 314.;
 #define SUN_COLOR vec3(249, 231, 42)/256.
 
+//Raymarching intersections.
+const uint NB_STEPS = 256u;
+const float EPSILON = 0.001;
+const float MAX_DEPTH = 1.;
+const float JACOBIAN_FACTOR = 3.;
+
 //#define ZERO 0
 #define ZERO (min(int(iTime),0))
 #define ZEROu (uint(min(int(iTime),0)))
 
 
 float dot2(vec3 v) { return dot(v,v); }
+float dot2(vec2 v) { return dot(v,v); }
 float min3(vec3 v) { return min(min(v.x, v.y), v.z); }
 float sqr(float x) { return x*x; }
 
@@ -121,9 +128,11 @@ float randUniform()
 //https://www.shadertoy.com/view/Xsl3Dl
 vec3 hash( vec3 p ) // replace this by something better. really. do
 {
-	p = vec3( dot(p,vec3(127.1,311.7, 74.7)),
-			  dot(p,vec3(269.5,183.3,246.1)),
-			  dot(p,vec3(113.5,271.9,124.6)));
+	p = vec3(
+		dot(p,vec3(127.1,311.7, 74.7)),
+		dot(p,vec3(269.5,183.3,246.1)),
+		dot(p,vec3(113.5,271.9,124.6))
+	);
 	return -1.0 + 2.0*fract(sin(p)*43758.5453123);
 }
 float noise( in vec3 p )
@@ -146,15 +155,15 @@ float noise( in vec3 p )
 //https://iquilezles.org/www/articles/distfunctions/distfunctions.htm
 float sdRoundBox( vec3 p, vec3 b, float r )
 {
-  vec3 q = abs(p) - b;
-  return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0) - r;
+	vec3 q = abs(p) - b;
+	return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0) - r;
 }
 float sdCylinder(vec3 p, vec3 a, vec3 b, float r)
 {
 	vec3  ba = b - a;
 	vec3  pa = p - a;
-	float baba = dot(ba,ba);
-	float paba = dot(pa,ba);
+	float baba = dot2(ba);
+	float paba = dot(pa, ba);
 	float x = length(pa*baba-ba*paba) - r*baba;
 	float y = abs(paba-baba*0.5)-baba*0.5;
 	float x2 = x*x;
@@ -166,21 +175,21 @@ float sdCylinder(vec3 p, vec3 a, vec3 b, float r)
 }
 float sdRoundedCylinder( vec3 p, float ra, float rb, float h )
 {
-  vec2 d = vec2( length(p.xz)-2.0*ra+rb, abs(p.y) - h );
-  return min(max(d.x,d.y),0.0) + length(max(d,0.0)) - rb;
+	vec2 d = vec2( length(p.xz)-2.0*ra+rb, abs(p.y) - h );
+	return min(max(d.x,d.y),0.0) + length(max(d,0.0)) - rb;
 }
 float sdRoundCone(vec3 p, vec3 a, vec3 b, float r1, float r2)
 {
 	// sampling independent computations (only depend on shape)
 	vec3  ba = b - a;
-	float l2 = dot(ba,ba);
+	float l2 = dot2(ba);
 	float rr = r1 - r2;
 	float a2 = l2 - rr*rr;
 	float il2 = 1.0/l2;
 
 	// sampling dependant computations
 	vec3 pa = p - a;
-	float y = dot(pa,ba);
+	float y = dot(pa, ba);
 	float z = y - l2;
 	float x2 = dot2( pa*l2 - ba*y );
 	float y2 = y*y*l2;
@@ -188,31 +197,32 @@ float sdRoundCone(vec3 p, vec3 a, vec3 b, float r1, float r2)
 
 	// single square root!
 	float k = sign(rr)*rr*rr*x2;
-	if( sign(z)*a2*z2 > k ) return  sqrt(x2 + z2)		*il2 - r2;
-	if( sign(y)*a2*y2 < k ) return  sqrt(x2 + y2)		*il2 - r1;
-							return (sqrt(x2*a2*il2)+y*rr)*il2 - r1;
+	if( sign(z)*a2*z2 > k ) return sqrt(x2 + z2)*il2 - r2;
+	if( sign(y)*a2*y2 < k ) return sqrt(x2 + y2)*il2 - r1;
+	return (sqrt(x2*a2*il2)+y*rr)*il2 - r1;
 }
 float udQuad( vec3 p, vec3 a, vec3 b, vec3 c, vec3 d )
 {
-  vec3 ba = b - a; vec3 pa = p - a;
-  vec3 cb = c - b; vec3 pb = p - b;
-  vec3 dc = d - c; vec3 pc = p - c;
-  vec3 ad = a - d; vec3 pd = p - d;
-  vec3 nor = cross( ba, ad );
-
-  return sqrt(
-	(sign(dot(cross(ba,nor),pa)) +
-	 sign(dot(cross(cb,nor),pb)) +
-	 sign(dot(cross(dc,nor),pc)) +
-	 sign(dot(cross(ad,nor),pd))<3.0)
-	 ?
-	 min( min( min(
-	 dot2(ba*clamp(dot(ba,pa)/dot2(ba),0.0,1.0)-pa),
-	 dot2(cb*clamp(dot(cb,pb)/dot2(cb),0.0,1.0)-pb) ),
-	 dot2(dc*clamp(dot(dc,pc)/dot2(dc),0.0,1.0)-pc) ),
-	 dot2(ad*clamp(dot(ad,pd)/dot2(ad),0.0,1.0)-pd) )
-	 :
-	 dot(nor,pa)*dot(nor,pa)/dot2(nor) );
+	vec3 ba = b - a; vec3 pa = p - a;
+	vec3 cb = c - b; vec3 pb = p - b;
+	vec3 dc = d - c; vec3 pc = p - c;
+	vec3 ad = a - d; vec3 pd = p - d;
+	vec3 nor = cross( ba, ad );
+	
+	return sqrt(
+		(sign(dot(cross(ba,nor),pa)) +
+		sign(dot(cross(cb,nor),pb)) +
+		sign(dot(cross(dc,nor),pc)) +
+		sign(dot(cross(ad,nor),pd))<3.0)
+		?
+		min( min( min(
+		dot2(ba*clamp(dot(ba,pa)/dot2(ba),0.0,1.0)-pa),
+		dot2(cb*clamp(dot(cb,pb)/dot2(cb),0.0,1.0)-pb) ),
+		dot2(dc*clamp(dot(dc,pc)/dot2(dc),0.0,1.0)-pc) ),
+		dot2(ad*clamp(dot(ad,pd)/dot2(ad),0.0,1.0)-pd) )
+		:
+		dot(nor,pa)*dot(nor,pa)/dot2(nor)
+	);
 }
 void opCheapBend(inout vec3 p, in float k)
 {
@@ -234,18 +244,18 @@ float sphereD(in vec3 c, in float r, in vec3 p)
 //a disk of unit radius in the xy plane
 float diskD(in vec3 p)
 {
-	float r2 = dot(p.xy, p.xy);
+	float r2 = dot2(p.xy);
 	//Projection in the disk, closest is disk surface.
 	if(r2 < 1.0) return abs(p.z);
 	
 	//Projection out of disk, closest is distance to circle.
 	float r = sqrt(r2);
 	float h = r - 1.0;
-	return sqrt(h*h + p.z*p.z);
+	return sqrt(h*h + sqr(p.z));
 }
 vec3 diskP(in vec3 p)
 {
-	float r2 = dot(p.xy, p.xy);
+	float r2 = dot2(p.xy);
 	//Projection in the disk, closest is disk surface.
 	if(r2 < 1.0) return vec3(p.xy, sign(p.z));
 	
@@ -344,7 +354,7 @@ uint[] jfig_bitfield = uint[](
 );
 bool jfig(in vec2 uv)
 {
-	uvec2 ij = uvec2(uv * vec2(JFIGW, JFIGH) + (0.5, 0.));
+	uvec2 ij = uvec2(uv * vec2(JFIGW, JFIGH) + vec2(0.5, 0.));
 	uint id = ij.x + (JFIGH-1u-ij.y)*JFIGW;
 	if(id>=JFIGW*JFIGH) return false;
 	return 0u != (jfig_bitfield[id/32u] & (1u << (id&31u)));
@@ -505,10 +515,6 @@ vec3 calcNormal( in vec3 pos, in float eps )
 	return normalize(n);
 }
 
-const uint NB_STEPS = 128u;
-const float EPSILON = 0.001;
-const float MAX_DEPTH = 1.;
-const float JACOBIAN_FACTOR = 1.1;
 bool intersect(in vec3 ro, in vec3 rd, out Hit hit)
 {
 	float t = 0.;
@@ -539,7 +545,6 @@ float reflectance(float cosine, float ratio)
 bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, inout vec3 pdf)
 {
 	vec3 color = shade(hit);
-	vec3 normal = hit.n;
 	switch(hit.m)
 	{
         //Diffuse materials.
@@ -549,11 +554,11 @@ bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, i
 		case PETAL:
 		case STEM:
 		{
-			vec3 bounceDirection = randomLambertianReflection(normal, randUniform(), randUniform());
-			float p = dot(normal, bounceDirection)/PI;
-			float d = dot(normal, bounceDirection);
-			attenuation *= 1./PI * d * color;
-			ro = hit.p + normal*2.*EPSILON;
+			vec3 bounceDirection = randomLambertianReflection(hit.n, randUniform(), randUniform());
+			float p = dot(hit.n, bounceDirection)/PI;
+			float d = dot(hit.n, bounceDirection);
+			attenuation *= d / PI * color;
+			ro = hit.p + hit.n*2.*EPSILON;
 			rd = bounceDirection;
 			pdf *= p;
 			return true;
@@ -566,15 +571,15 @@ bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, i
 			const float glassRefractionIndex = 1.5;
 			float refractionIndexRatio = airRefractionIndex/glassRefractionIndex;
 			
-			bool backFace = dot(rd, normal) > 0.;
+			bool backFace = dot(rd, hit.n) > 0.;
 			//bool backFace = hit.d < 0.;
 			if(backFace) //swap for backface
 			{
 				refractionIndexRatio = 1./refractionIndexRatio;
-				normal = -normal;
+				hit.n = -hit.n;
 			}
 			
-			float cosTheta = dot(-rd, normal);
+			float cosTheta = dot(-rd, hit.n);
 			float sinTheta = sqrt(1. - sqr(cosTheta));
 			float reflectedRatio = sinTheta * refractionIndexRatio > 1. ? 1. : reflectance(cosTheta, refractionIndexRatio);
 			
@@ -583,16 +588,16 @@ bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, i
 			{
 				attenuation *= reflectedRatio;
 				pdf *= reflectedRatio;
-				rd = reflect(rd, normal);
+				rd = reflect(rd, hit.n);
 			}
 			else
 			{
 				attenuation *= (1. - reflectedRatio);
 				pdf *= (1. - reflectedRatio);
-				rd = refract(rd, normal, refractionIndexRatio);
+				rd = refract(rd, hit.n, refractionIndexRatio);
 			}
 			
-			ro = hit.p - normal*2.*EPSILON;
+			ro = hit.p - hit.n*2.*EPSILON;
 			attenuation *= color;
 			return true;
 		}
@@ -666,6 +671,7 @@ void render(out vec4 fragColor, in vec2 fragCoord)
 
 
 
+///////
 
 void main(/*out vec4 fragColor, in vec2 fragCoordv*/)
 {
@@ -701,5 +707,4 @@ void main(/*out vec4 fragColor, in vec2 fragCoordv*/)
 	fragment_color = oldColor;
 	imageStore(image, ivec2(pixel), fragment_color);
 }
-///////
 #endif
