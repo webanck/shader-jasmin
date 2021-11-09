@@ -29,6 +29,7 @@ vec2 iResolution;
 #define SUN true
 #define SAMPLES 1u
 #define BOUNCES 50u
+#define BIFACE true
 
 const float PI = 3.14;
 #define SUN_DIRECTION normalize(vec3(-1.))
@@ -520,11 +521,26 @@ bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, i
 	switch(hit.m)
 	{
         //Diffuse materials.
-		case TABLE:
-		case LABEL:
 		case PISTIL:
 		case PETAL:
 		case STEM:
+		if(BIFACE){
+			bool backFace = dot(rd, hit.n) > 0.;
+			//bool backFace = hit.d < 0.;
+			if(backFace) //swap for backface
+			{
+				hit.n = -hit.n;
+			}
+			if(randUniform() > 0.5)
+			{
+				hit.n = -hit.n;
+				attenuation *= 0.9;
+			}
+			attenuation *= 0.5;
+			pdf *= 0.5;
+		}
+		case TABLE:
+		case LABEL:
 		{
 			vec3 bounceDirection = randomLambertianReflection(hit.n, randUniform(), randUniform());
 			float p = dot(hit.n, bounceDirection)/PI;
