@@ -31,10 +31,17 @@ vec2 iResolution;
 #define BOUNCES 50u
 #define BIFACE true
 
+#define NO_MIS 0u
+#define BALANCED_MIS 1u
+#define SMART_MIS 2u
+const uint MIS_TYPE = SMART_MIS;
+
 const float PI = 3.14;
 #define SUN_DIRECTION normalize(vec3(-1.))
+//#define SUN_DIRECTION vec3(0., -1., 0.)
 const float SUN_INTENSITY = 314.;
 #define SUN_COLOR vec3(249, 231, 42)/256.
+const float SUN_APPARENT_RATIO = 0.02;
 
 //Raymarching intersections.
 const uint NB_STEPS = 256u;
@@ -320,9 +327,9 @@ Hit jasminD(in float r, in vec3 p, in vec3 wp)
 #define JFIGH 18u
 uint[] jfig_bitfield = uint[](
 	0x0u,0x0u,0x0u,0xf97800u,0x90900u,0xc91800u,0x890900u,0xf90900u,0x180u,
-    //2020
+	//2020
 	//0x0u, 0x30e30e0u, 0x4904900u, 0x49e49e0u, 0x4824820u, 0x31e31e0u, 0x0u,0x0u,0x0u
-    //hello 2021!
+	//hello 2021!
 	  0x0u, 0x40e30e0u, 0x4104900u, 0x41e49e0u, 0x4024820u, 0x41e31e0u, 0x0u,0x0u,0x0u
 );
 bool jfig(in vec2 uv)
@@ -435,6 +442,56 @@ vec3 randomDirection(in float u, in float v)
 		hRadius*sin(longitude)
 	);
 }
+float sphereCapArea(in float angle)
+{
+	return 2.*PI * (1. - cos(angle));
+}
+//sample sphere cap of given angle at top of z axis
+vec3 randomSphereCapDirection(in float u, in float v, in float angle, out float pdf)
+{
+	float longitude = 2.*PI*u;
+	float colatitude = acos(1. - v*(1. - cos(angle)));
+	float hRadius = sin(colatitude);
+	
+	pdf = 1./sphereCapArea(angle);
+	
+	return vec3(
+		hRadius*cos(longitude),
+		hRadius*sin(longitude),
+		cos(colatitude)
+	);
+}
+//sample sphere cap at any axis
+vec3 randomSphereCapDirection(in float u, in float v, in vec3 direction, in float angle, out float pdf)
+{
+	float longitude = atan(direction.y, direction.x);
+	float colatitude = acos(direction.z);
+	
+	//3 vectors forming the base (dtheta, dphi, dr)
+	float cc = cos(colatitude);
+	float sc = sin(colatitude);
+	float cl = cos(longitude);
+	float sl = sin(longitude);
+	vec3 dtheta = vec3(
+		-sl,
+		cl,
+		0
+	);
+	vec3 dphi = vec3(
+		cc*cl,
+		cc*sl,
+		-sc
+	);
+	vec3 dr = vec3(
+		sc*cl,
+		sc*sl,
+		cc
+	);
+	//define the transformation matrix
+	mat3 m = mat3(dtheta, dphi, dr);
+	
+	return m * randomSphereCapDirection(u, v, angle, pdf);
+}
 vec3 randomHemisphereDirection(in vec3 up, in float u, in float v)
 {
 	vec3 direction = randomDirection(u, v);
@@ -453,10 +510,13 @@ vec3 randomLambertianReflection(in vec3 normal, in float u, in float v)
 
 
 
-
-vec3 sunlight(in vec3 d)
+bool isSunDirection(in vec3 direction)
 {
-	return dot(-SUN_DIRECTION, d) > 0.99 ? SUN_COLOR*SUN_INTENSITY : vec3(0.);
+	return dot(-SUN_DIRECTION, direction) > (1. - 0.5*SUN_APPARENT_RATIO);
+}
+vec3 sunlight(in vec3 direction)
+{
+	return isSunDirection(direction) ? SUN_COLOR*SUN_INTENSITY : vec3(0.);
 }
 vec3 background(in vec3 d)
 {
@@ -472,6 +532,15 @@ vec3 background(in vec3 d)
 		light += sunlight(d);
 
 	return light;
+}
+	//0.05*PI is the smallest angle without loss of energy
+float randomSunlightPdf(in vec3 direction)
+{
+	return isSunDirection(direction) ? 1./sphereCapArea(max(0.05, SUN_APPARENT_RATIO*0.5)*PI) : 0.;
+}
+vec3 randomSunlightDirection(in float u, in float v, out float pdf, in vec3 n)
+{
+	return randomSphereCapDirection(u, v, -SUN_DIRECTION, max(0.05, SUN_APPARENT_RATIO*0.5)*PI, pdf);
 }
 
 // http://iquilezles.org/www/articles/normalsSDF/normalsSDF.htm
@@ -517,14 +586,15 @@ float reflectance(float cosine, float ratio)
 
 bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, inout vec3 pdf)
 {
+	if(dot2(hit.n) < 0.5) return false;
 	vec3 color = shade(hit);
 	switch(hit.m)
 	{
-        //Diffuse materials.
+		//Diffuse materials.
 		case PISTIL:
 		case PETAL:
-		case STEM:
-		if(BIFACE){
+		case STEM: if(BIFACE)
+		{
 			bool backFace = dot(rd, hit.n) > 0.;
 			//bool backFace = hit.d < 0.;
 			if(backFace) //swap for backface
@@ -542,16 +612,64 @@ bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, i
 		case TABLE:
 		case LABEL:
 		{
-			vec3 bounceDirection = randomLambertianReflection(hit.n, randUniform(), randUniform());
-			float p = dot(hit.n, bounceDirection)/PI;
-			float d = dot(hit.n, bounceDirection);
+			float skylightPdf = 0.;
+			float bsdfPdf = 0.;
+			vec3 bounceDirection;
+
+			float c0;
+			switch(MIS_TYPE)
+			{
+				case NO_MIS: c0 = 0.;
+					break;
+				case BALANCED_MIS: c0 = 0.5;
+					break;
+				//Rough estimation of relative importance between sunlight and skylight.
+				case SMART_MIS:
+				{
+					const float skyWeight = 1.;
+					const float sunWeight = SUN_INTENSITY*max(0., dot(hit.n, -SUN_DIRECTION));
+					float skyImportance = 2.*PI;
+					float sunImportance = SUN_INTENSITY*sphereCapArea(SUN_APPARENT_RATIO*0.5*PI);
+					c0 = sunImportance/(skyImportance + sunImportance);
+				}
+			}
+			float c1 = 1. - c0;
+
+			//Sunlight strategy.
+			if(randUniform() < c0)
+			{
+				bounceDirection = randomSunlightDirection(randUniform(), randUniform(), skylightPdf, hit.n);
+				bsdfPdf = max(0., dot(hit.n, bounceDirection)/PI);
+
+				float p0 = c0*skylightPdf;
+				float p1 = c1*bsdfPdf;
+				float ps = p0 + p1;
+				pdf *= p0;
+				attenuation *= p0/ps;
+			}
+			//BSDF strategy.
+			else
+			{
+				bounceDirection = randomLambertianReflection(hit.n, randUniform(), randUniform());
+				bsdfPdf = dot(hit.n, bounceDirection)/PI;
+				skylightPdf = randomSunlightPdf(bounceDirection);
+
+				float p0 = c0*skylightPdf;
+				float p1 = c1*bsdfPdf;
+				float ps = p0 + p1;
+				pdf *= p1;
+				attenuation *= p1/ps;
+			}
+
+			float d = max(0., dot(hit.n, bounceDirection));
+			if(d <= 0.) return false;
+
 			attenuation *= d / PI * color;
-			ro = hit.p + hit.n*2.*EPSILON;
+			ro = hit.p + hit.n*4.*EPSILON;
 			rd = bounceDirection;
-			pdf *= p;
 			return true;
 		}
-        //Glass.
+		//Glass.
 		case FLASK:
 		case CAP:
 		{
