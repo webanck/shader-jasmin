@@ -75,32 +75,12 @@ vec3 rotateY(in float rads, in vec3 p)
 
 //-----------------------
 const bool CORRELATED_SAMPLES = false;
-//http://reedbeta.com/blog/quick-and-easy-gpu-random-numbers-in-d3d11/
-//32 bits
-uint rand_lcg(inout uint state)
+//https://www.pcg-random.org/
+uint pcg(inout uint state)
 {
-	// LCG values from Numerical Recipes
-	state = 1664525u * state + 1013904223u;
-	return state;
-}
-//http://reedbeta.com/blog/quick-and-easy-gpu-random-numbers-in-d3d11/
-//32 bits
-uint rand_xorshift(inout uint state)
-{
-	// Xorshift algorithm from George Marsaglia's paper
-	state ^= (state << 13);
-	state ^= (state >> 17);
-	state ^= (state << 5);
-	return state;
-}
-//http://reedbeta.com/blog/quick-and-easy-gpu-random-numbers-in-d3d11/
-void wang_hash(inout uint seed)
-{
-	seed = (seed ^ 61u) ^ (seed >> 16u);
-	seed *= 9u;
-	seed = seed ^ (seed >> 4);
-	seed *= 0x27d4eb2du;
-	seed = seed ^ (seed >> 15);
+	state = state * 747796405u + 2891336453u;
+	uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+	return (word >> 22u) ^ word;
 }
 uint randState = 0u;
 void initRandState(const float time, const uvec2 pixel, const uvec2 resolution, const uint iteration)
@@ -110,31 +90,23 @@ void initRandState(const float time, const uvec2 pixel, const uvec2 resolution, 
 		randState = i;
 	else
 		randState = pixel.x + resolution.x*(pixel.y + resolution.y*i);
-	wang_hash(randState);
-}
-float randUniform(inout uint state)
-{
-	return fract(float(rand_xorshift(state)) * (1.0 / 4294967296.0));
 }
 float randUniform()
 {
-	return randUniform(randState);
+	return fract(float(pcg(randState)) / 4294967296.);
 }
 
 //-----------------------
 
 
-
-//https://www.shadertoy.com/view/Xsl3Dl
-vec3 hash( vec3 p ) // replace this by something better. really. do
+//https://www.shadertoy.com/view/4djSRW
+vec3 hash(vec3 p3)
 {
-	p = vec3(
-		dot(p,vec3(127.1,311.7, 74.7)),
-		dot(p,vec3(269.5,183.3,246.1)),
-		dot(p,vec3(113.5,271.9,124.6))
-	);
-	return -1.0 + 2.0*fract(sin(p)*43758.5453123);
+	p3 = fract(p3 * vec3(.1031, .1030, .0973));
+    p3 += dot(p3, p3.yxz+33.33);
+    return fract((p3.xxy + p3.yxx)*p3.zyx);
 }
+//https://www.shadertoy.com/view/Xsl3Dl
 float noise( in vec3 p )
 {
 	vec3 i = floor( p );
@@ -290,7 +262,7 @@ Hit petal(in float r, in vec3 p, in vec3 wp, in uint i)
 	//shift
 	p.x -= 1.;
 
-	float noiseWarp = 0.3*(noise(7.*wp));
+	float noiseWarp = 0.3*(noise(vec3(7.*wp.xy, 0.)));
 	float r1 = distance(vec2(-1., 0.), p.xy);
 	float centerWarp = exp(-r1 * 2.);
 	p.z -= centerWarp - 2.*max(0., 1. - centerWarp)*noiseWarp;
@@ -312,7 +284,7 @@ Hit jasminD(in float r, in vec3 p, in vec3 wp)
 {
 	p = rotateY(0.5*PI, p);
 	opCheapBend(p, 1.);
-	p = rotateZ(0.22*PI, p);
+	p = rotateZ(0.23*PI, p);
 	p = rotateY(-0.5*PI, p);
 
 	Hit hit;
@@ -320,7 +292,7 @@ Hit jasminD(in float r, in vec3 p, in vec3 wp)
 	for(uint i = 0u; i < NB_PETALS; i++)
 	{
 		vec3 q = rotateZ(2.*PI*float(i)/float(NB_PETALS), p);
-		Hit newHit = petal(r, q, wp, i);
+		Hit newHit = petal(r, q, p, i);
 		if(newHit.d < hit.d)
 			hit = newHit;
 	}
@@ -354,7 +326,7 @@ uint[] jfig_bitfield = uint[](
 );
 bool jfig(in vec2 uv)
 {
-	uvec2 ij = uvec2(uv * vec2(JFIGW, JFIGH) + vec2(0.5, 0.));
+	uvec2 ij = uvec2(uv * vec2(JFIGW, JFIGH));
 	uint id = ij.x + (JFIGH-1u-ij.y)*JFIGW;
 	if(id>=JFIGW*JFIGH) return false;
 	return 0u != (jfig_bitfield[id/32u] & (1u << (id&31u)));
@@ -417,11 +389,11 @@ Hit map(in vec3 p)
 	//Flower
 	float radius = 0.15;
 	p.y += 2.*halfDiag.y;
-	p.y -= radius/3. - 0.011;
+	p.y -= radius/3. - 0.009;
 	p.x -= 2.*halfDiag.x;
 	p.z += 1.5*halfDiag.z;
 	p = rotateY(-2.1*PI, p);
-	p = rotateZ(-0.03*PI, p);
+	p = rotateZ(-0.04*PI, p);
 	p *= 3.;
 	Hit jHit = jasminD(radius, p, p);
 	jHit.d /= 3.;
@@ -681,6 +653,7 @@ void main(/*out vec4 fragColor, in vec2 fragCoordv*/)
 	if(any(greaterThanEqual(pixel, iResolution))) return;
 
 	vec4 oldColor = imageLoad(image, ivec2(pixel));
+	if(iMouse.z > 0.) oldColor = vec4(0.);
 	for(uint i = ZEROu; i < SAMPLES; i++)
 	{
 		initRandState(iTime, uvec2(pixel), uvec2(iResolution.xy), uint(oldColor.w));
@@ -691,13 +664,6 @@ void main(/*out vec4 fragColor, in vec2 fragCoordv*/)
 		//Avoid degenerate paths.
 		if(any(isnan(newColor)) || any(lessThan(newColor, vec4(0.))))
 			continue;
-
-		if(iMouse.z != 0.)
-		{
-			fragment_color = newColor;
-			imageStore(image, ivec2(pixel), fragment_color);
-			return;
-		}
 
 		float count = oldColor.a + newColor.a;
 		oldColor = vec4(oldColor.rgb + (newColor.rgb - oldColor.rgb) / count, count);
