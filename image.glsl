@@ -34,7 +34,7 @@ vec2 iResolution;
 #define NO_MIS 0u
 #define BALANCED_MIS 1u
 #define SMART_MIS 2u
-const uint MIS_TYPE = SMART_MIS;
+const uint MIS_TYPE = BALANCED_MIS;
 
 const float PI = 3.14;
 #define SUN_DIRECTION normalize(vec3(-1.))
@@ -44,10 +44,10 @@ const float SUN_INTENSITY = 314.;
 const float SUN_APPARENT_RATIO = 0.02;
 
 //Raymarching intersections.
-const uint NB_STEPS = 256u;
+const uint NB_STEPS = 128u;
 const float EPSILON = 0.001;
 const float MAX_DEPTH = 1.;
-const float JACOBIAN_FACTOR = 3.;
+const float JACOBIAN_FACTOR = 1.1;
 
 //#define ZERO 0
 #define ZERO (min(int(iTime),0))
@@ -601,13 +601,25 @@ bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, i
 			{
 				hit.n = -hit.n;
 			}
-			if(randUniform() > 0.5)
+            const float transmittance = 0.1;
+            float pPassThrough = transmittance/(transmittance + 1.);
+			if(randUniform() < pPassThrough)
 			{
 				hit.n = -hit.n;
-				attenuation *= 0.9;
+                while(abs(map(hit.p).d) < EPSILON)
+                    hit.p += hit.n*EPSILON;
+                //hit.p += hit.n*5.*EPSILON;
+                Hit newHit = map(hit.p);
+                if(abs(newHit.d) < EPSILON || newHit.m == TABLE) return false;
+                
+				attenuation *= transmittance;
+                pdf *= transmittance;
 			}
-			attenuation *= 0.5;
-			pdf *= 0.5;
+            else
+            {
+                attenuation *= 1. - pPassThrough;
+                pdf *= 1. - pPassThrough;
+            }
 		}
 		case TABLE:
 		case LABEL:
@@ -627,7 +639,7 @@ bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, i
 				case SMART_MIS:
 				{
 					const float skyWeight = 1.;
-					const float sunWeight = SUN_INTENSITY*max(0., dot(hit.n, -SUN_DIRECTION));
+					float sunWeight = SUN_INTENSITY*max(0., dot(hit.n, -SUN_DIRECTION));
 					float skyImportance = 2.*PI;
 					float sunImportance = SUN_INTENSITY*sphereCapArea(SUN_APPARENT_RATIO*0.5*PI);
 					c0 = sunImportance/(skyImportance + sunImportance);
@@ -662,10 +674,10 @@ bool scatter(inout vec3 ro, inout vec3 rd, in Hit hit, inout vec3 attenuation, i
 			}
 
 			float d = max(0., dot(hit.n, bounceDirection));
-			if(d <= 0.) return false;
+			//if(d <= 0.) return false;
 
 			attenuation *= d / PI * color;
-			ro = hit.p + hit.n*4.*EPSILON;
+			ro = hit.p + hit.n*2.*EPSILON;
 			rd = bounceDirection;
 			return true;
 		}
