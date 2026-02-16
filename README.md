@@ -10,7 +10,7 @@ The flask is labelled as this edition of the JFIG.
 
 |Original submission version preview|Revised version preview|
 |---|---|
-|![original preview](https://www.shadertoy.com/media/shaders/NldGR8.jpg)|![revised preview](https://www.shadertoy.com/media/shaders/7lG3D1.jpg)|
+|![original preview](preview-v1.jpg)|![revised preview](preview-v2.jpg)|
 
 
 # Inspiration
